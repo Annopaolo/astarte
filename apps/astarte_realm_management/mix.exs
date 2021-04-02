@@ -63,9 +63,11 @@ defmodule Astarte.RealmManagement.Mixfile do
 
   defp astarte_required_modules(_) do
     [
-      {:astarte_core, "~> 1.0.0-beta.2"},
+      {:astarte_core,
+       github: "Annopaolo/astarte_core", branch: "delivery_policy", override: true},
       {:astarte_data_access, "~> 1.0.0-beta.2"},
-      {:astarte_rpc, "~> 1.0.0-beta.2"}
+      {:astarte_rpc,
+       github: "Annopaolo/astarte_rpc", branch: "trigger_policy_protobuf", override: true}
     ]
   end
 
