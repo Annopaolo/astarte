@@ -29,6 +29,8 @@ defmodule Astarte.RealmManagement.Engine do
   alias Astarte.Core.Triggers.SimpleTriggersProtobuf.TaggedSimpleTrigger
   alias Astarte.Core.Triggers.SimpleTriggersProtobuf.TriggerTargetContainer
   alias Astarte.Core.Triggers.Trigger
+  alias Astarte.Core.Triggers.Policy
+  alias Astarte.Core.Triggers.PolicyProtobuf.Policy, as: PolicyProto
   alias Astarte.DataAccess.Database
   alias Astarte.DataAccess.Interface
   alias Astarte.DataAccess.Mappings
@@ -470,7 +472,13 @@ defmodule Astarte.RealmManagement.Engine do
     end
   end
 
-  def install_trigger(realm_name, trigger_name, action, serialized_tagged_simple_triggers) do
+  def install_trigger(
+        realm_name,
+        trigger_name,
+        trigger_policy_name,
+        action,
+        serialized_tagged_simple_triggers
+      ) do
     _ =
       Logger.info("Going to install a new trigger.",
         trigger_name: trigger_name,
@@ -481,14 +489,15 @@ defmodule Astarte.RealmManagement.Engine do
          {:exists?, {:error, :trigger_not_found}} <-
            {:exists?, Queries.retrieve_trigger_uuid(client, trigger_name)},
          simple_trigger_maps = build_simple_trigger_maps(serialized_tagged_simple_triggers),
-         trigger = build_trigger(trigger_name, simple_trigger_maps, action),
+         trigger = build_trigger(trigger_name, trigger_policy_name, simple_trigger_maps, action),
          %Trigger{trigger_uuid: trigger_uuid} = trigger,
          {:ok, action_map} <- Jason.decode(action),
          trigger_target = target_from_action(action_map, trigger_uuid),
          t_container = build_trigger_target_container(trigger_target),
          :ok <- validate_simple_triggers(client, simple_trigger_maps),
          # TODO: these should be batched together
-         :ok <- install_simple_triggers(client, simple_trigger_maps, trigger_uuid, t_container) do
+         :ok <- install_simple_triggers(client, simple_trigger_maps, trigger_uuid, t_container),
+         :ok <- install_trigger_policy_link(client, trigger_uuid, trigger_policy_name) do
       _ =
         Logger.info("Installing trigger.",
           trigger_name: trigger_name,
@@ -548,7 +557,7 @@ defmodule Astarte.RealmManagement.Engine do
     end
   end
 
-  defp build_trigger(trigger_name, simple_trigger_maps, action) do
+  defp build_trigger(trigger_name, policy, simple_trigger_maps, action) do
     simple_trigger_uuids =
       for simple_trigger_map <- simple_trigger_maps do
         simple_trigger_map[:simple_trigger_uuid]
@@ -558,7 +567,8 @@ defmodule Astarte.RealmManagement.Engine do
       trigger_uuid: :uuid.get_v4(),
       simple_triggers_uuids: simple_trigger_uuids,
       action: action,
-      name: trigger_name
+      name: trigger_name,
+      policy: policy
     }
   end
 
@@ -670,6 +680,23 @@ defmodule Astarte.RealmManagement.Engine do
     end)
   end
 
+  defp install_trigger_policy_link(_client, _trigger_uuid, nil) do
+    :ok
+  end
+
+  defp install_trigger_policy_link(client, trigger_uuid, trigger_policy_name) do
+    with {:trigger_policy_avail, {:ok, true}} <-
+           Queries.trigger_policy_already_available?(client, trigger_policy_name) do
+      Queries.install_trigger_policy_link(client, trigger_uuid, trigger_policy_name)
+    else
+      {:trigger_policy_avail, {:ok, false}} ->
+        {:error, :trigger_policy_not_available}
+
+      any ->
+        any
+    end
+  end
+
   def get_trigger(realm_name, trigger_name) do
     _ = Logger.debug("Get trigger.", trigger_name: trigger_name)
 
@@ -727,12 +754,15 @@ defmodule Astarte.RealmManagement.Engine do
       _ =
         Logger.info("Deleting trigger.", trigger_name: trigger_name, tag: "delete_trigger_started")
 
-      delete_all_succeeded =
+      delete_all_simple_triggers_succeeded =
         Enum.all?(trigger.simple_triggers_uuids, fn simple_trigger_uuid ->
           Queries.delete_simple_trigger(client, trigger.trigger_uuid, simple_trigger_uuid) == :ok
         end)
 
-      if delete_all_succeeded do
+      delete_policy_link_succeeded =
+        Queries.delete_trigger_policy_link(client, trigger.trigger_uuid, trigger.policy) == :ok
+
+      if delete_all_simple_triggers_succeeded and delete_policy_link_succeeded do
         Queries.delete_trigger(client, trigger_name)
       else
         {:error, :cannot_delete_simple_trigger}
@@ -749,5 +779,128 @@ defmodule Astarte.RealmManagement.Engine do
       Config.cassandra_node!(),
       cqex_options
     )
+  end
+
+  def install_trigger_policy(realm_name, policy_json, opts \\ []) do
+    _ = Logger.info("Going to install a new trigger policy.", tag: "install_trigger_policy")
+
+    with {:ok, client} <- Database.connect(realm: realm_name),
+         {:ok, json_obj} <- Jason.decode(policy_json),
+         policy_changeset <- Policy.changeset(%Policy{}, json_obj),
+         {:ok, %Policy{name: policy_name} = policy} <-
+           Ecto.Changeset.apply_action(policy_changeset, :insert),
+         {:trigger_policy_avail, {:ok, false}} <-
+           Queries.trigger_policy_already_available?(client, policy_name) do
+      _ =
+        Logger.info("Installing trigger policy.",
+          trigger_policy: policy_name,
+          tag: "install_policy_started"
+        )
+
+      policy_proto = policy |> Policy.to_policy_proto() |> PolicyProto.encode()
+
+      if opts[:async] do
+        Task.start(Queries, :install_trigger_policy, [client, policy_name, policy_proto])
+
+        {:ok, :started}
+      else
+        Queries.install_new_trigger_policy(client, policy_name, policy_proto)
+      end
+    else
+      {:error, {:invalid, _invalid_str, _invalid_pos}} ->
+        _ =
+          Logger.warn("Received invalid trigger policy JSON: #{inspect(policy_json)}.",
+            tag: "invalid_trigger_policy_json"
+          )
+
+        {:error, :invalid_trigger_policy_json}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        _ =
+          Logger.warn("Received invalid trigger policy: #{inspect(changeset)}.",
+            tag: "invalid_trigger_policy"
+          )
+
+      {:trigger_policy_avail, {:ok, true}} ->
+        {:error, :already_installed_trigger_policy}
+
+      {:error, :database_connection_error} ->
+        {:error, :realm_not_found}
+
+      {:error, :database_error} ->
+        {:error, :database_error}
+    end
+  end
+
+  def get_trigger_policies_list(realm_name) do
+    _ = Logger.debug("Get trigger policies list.")
+
+    with {:ok, client} <- Database.connect(realm: realm_name) do
+      Queries.get_trigger_policies_list(client)
+    else
+      {:error, :database_connection_error} ->
+        {:error, :realm_not_found}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  def trigger_policy_source(realm_name, policy_name) do
+    _ =
+      Logger.debug("Get trigger policy source.",
+        policy_name: policy_name
+      )
+
+    with {:ok, client} <- Database.connect(realm: realm_name),
+         {:ok, policy_proto} <- Queries.fetch_trigger_policy(client, policy_name) do
+      policy_proto |> PolicyProto.decode() |> Policy.from_policy_proto!() |> Jason.encode()
+    else
+      {:error, :invalid_policy_data} ->
+        {:error, :invalid__policy_data}
+    end
+  end
+
+  def delete_trigger_policy(realm_name, policy_name, opts \\ []) do
+    _ =
+      Logger.info("Going to delete trigger policy.",
+        tag: "delete_interface",
+        policy_name: policy_name
+      )
+
+    with {:ok, client} <- Database.connect(realm: realm_name),
+         {:trigger_policy_avail, {:ok, true}} <-
+           Queries.trigger_policy_already_available?(client, policy_name),
+         {:triggers, {:ok, false}} <- Queries.has_policy_triggers?(client, policy_name) do
+      if opts[:async] do
+        Task.start_link(Engine, :execute_trigger_policy_deletion, [client, policy_name])
+
+        {:ok, :started}
+      else
+        Engine.execute_trigger_policy_deletion(client, policy_name)
+      end
+    else
+      {:triggers, {:ok, true}} ->
+        {:error, :cannot_delete_currently_used_trigger_policy}
+
+      {:trigger_policy_avail, {:ok, false}} ->
+        {:error, :rigger_policy_not_installed}
+
+      {_, {:error, reason}} ->
+        {:error, reason}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  def execute_trigger_policy_deletion(client, policy_name) do
+    _ =
+      Logger.info("Trigger policy deletion started.",
+        policy_name: policy_name,
+        tag: "delete_trigger_policy_started"
+      )
+
+    Queries.delete_trigger_policy(client, policy_name)
   end
 end

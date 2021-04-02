@@ -63,9 +63,9 @@ defmodule Astarte.RealmManagement.Mixfile do
 
   defp astarte_required_modules(_) do
     [
-      {:astarte_core, "~> 1.0.0-beta.2"},
+      {:astarte_core, path: "~/astarte_core", override: true},
       {:astarte_data_access, "~> 1.0.0-beta.2"},
-      {:astarte_rpc, "~> 1.0.0-beta.2"}
+      {:astarte_rpc, path: "~/astarte_rpc", override: true}
     ]
   end
 
