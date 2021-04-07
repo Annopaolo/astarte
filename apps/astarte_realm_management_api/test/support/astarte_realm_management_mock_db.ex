@@ -1,8 +1,9 @@
 defmodule Astarte.RealmManagement.Mock.DB do
   alias Astarte.Core.Interface
+  alias Astarte.Core.Triggers.Policy
 
   def start_link do
-    Agent.start_link(fn -> %{interfaces: %{}} end, name: __MODULE__)
+    Agent.start_link(fn -> %{interfaces: %{}, trigger_policies: %{}} end, name: __MODULE__)
   end
 
   def drop_interfaces() do
@@ -99,5 +100,50 @@ defmodule Astarte.RealmManagement.Mock.DB do
 
   def put_jwt_public_key_pem(realm, jwt_public_key_pem) do
     Agent.update(__MODULE__, &Map.put(&1, "jwt_public_key_pem_#{realm}", jwt_public_key_pem))
+  end
+
+  def install_trigger_policy(realm, %Policy{name: name} = policy) do
+    if get_trigger_policy(realm, name) != nil do
+      {:error, :already_installed_trigger_policy}
+    else
+      Agent.update(__MODULE__, fn %{trigger_policies: trigger_policies} = state ->
+        %{state | trigger_policies: Map.put(trigger_policies, {realm, name}, policy)}
+      end)
+    end
+  end
+
+  def get_trigger_policies_list(realm) do
+    Agent.get(__MODULE__, fn %{trigger_policies: trigger_policies} ->
+      keys = Map.keys(trigger_policies)
+
+      for {^realm, name} <- keys do
+        name
+      end
+      |> Enum.uniq()
+    end)
+  end
+
+  def get_trigger_policy(realm, name) do
+    Agent.get(__MODULE__, fn %{trigger_policies: trigger_policies} ->
+      Map.get(trigger_policies, {realm, name})
+    end)
+  end
+
+  def delete_trigger_policy(realm, name) do
+    if get_trigger_policy(realm, name) == nil do
+      {:error, :trigger_policy_not_installed}
+    else
+      Agent.update(__MODULE__, fn %{interfaces: interfaces} = state ->
+        %{state | trigger_policies: Map.delete(interfaces, {realm, name})}
+      end)
+    end
+  end
+
+  def get_trigger_policy_source(realm_name, name) do
+    if trigger_policy = get_trigger_policy(realm_name, name) do
+      Jason.encode!(trigger_policy)
+    else
+      nil
+    end
   end
 end
