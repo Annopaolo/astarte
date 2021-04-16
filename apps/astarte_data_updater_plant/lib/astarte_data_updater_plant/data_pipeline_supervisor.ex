@@ -22,6 +22,7 @@ defmodule Astarte.DataUpdaterPlant.DataPipelineSupervisor do
   alias Astarte.DataUpdaterPlant.ConsumersSupervisor
   alias Astarte.DataUpdaterPlant.AMQPEventsProducer
   alias Astarte.DataUpdaterPlant.RPC.Handler
+  alias Astarte.DataUpdaterPlant.Triggers.PolicyRetriever
 
   alias Astarte.RPC.Protocol.DataUpdaterPlant, as: Protocol
 
@@ -34,6 +35,7 @@ defmodule Astarte.DataUpdaterPlant.DataPipelineSupervisor do
     children = [
       {Registry, [keys: :unique, name: Registry.MessageTracker]},
       {Registry, [keys: :unique, name: Registry.DataUpdater]},
+      PolicyRetriever,
       AMQPEventsProducer,
       ConsumersSupervisor,
       {Astarte.RPC.AMQP.Server, [amqp_queue: Protocol.amqp_queue(), handler: Handler]},

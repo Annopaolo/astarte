@@ -31,7 +31,7 @@ defmodule Astarte.DataUpdaterPlant.TriggersHandlerTest do
   @introspection "com.My.Interface:1:0;com.Another.Interface:1:2"
   @queue_name "test_events_queue"
   @routing_key "test_routing_key"
-  @realm "test"
+  @realm "autotestrealm"
   @device_id :crypto.strong_rand_bytes(16) |> Base.url_encode64(padding: false)
   @interface "com.Test.Interface"
   @major_version 1

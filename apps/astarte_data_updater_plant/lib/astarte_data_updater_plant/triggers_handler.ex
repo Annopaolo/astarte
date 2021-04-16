@@ -20,6 +20,7 @@ defmodule Astarte.DataUpdaterPlant.TriggersHandler do
   use Bitwise, only_operators: true
   require Logger
   alias Astarte.DataUpdaterPlant.Config
+  alias Astarte.DataUpdaterPlant.Triggers.PolicyRetriever
 
   @moduledoc """
   This module handles the triggers by generating the events requested
@@ -27,6 +28,7 @@ defmodule Astarte.DataUpdaterPlant.TriggersHandler do
   """
 
   @max_backoff_exponent 10
+  @max_rand trunc(:math.pow(2, 32) - 1)
 
   use Astarte.Core.Triggers.SimpleEvents
 
@@ -483,19 +485,24 @@ defmodule Astarte.DataUpdaterPlant.TriggersHandler do
       |> :uuid.uuid_to_string()
       |> to_string()
 
+    policy_name_str = PolicyRetriever.get_policy_name(simple_event.realm, parent_trigger_id_str)
+
     headers = [
       {"x_astarte_realm", simple_event.realm},
       {"x_astarte_device_id", simple_event.device_id},
       {"x_astarte_simple_trigger_id", simple_trigger_id_str},
       {"x_astarte_parent_trigger_id", parent_trigger_id_str},
-      {"x_astarte_event_type", to_string(event_type)}
+      {"x_astarte_event_type", to_string(event_type)},
+      {"x_astarte_trigger_policy", policy_name_str}
       | static_headers
     ]
 
     opts_with_nil = [
       expiration: message_expiration_ms && to_string(message_expiration_ms),
       priority: message_priority,
-      persistent: message_persistent
+      persistent: message_persistent,
+      message_id:
+        generate_message_id(simple_event.realm, simple_event.device_id, simple_event.timestamp)
     ]
 
     opts = Enum.filter(opts_with_nil, fn {_k, v} -> v != nil end)
@@ -514,5 +521,14 @@ defmodule Astarte.DataUpdaterPlant.TriggersHandler do
     )
 
     result
+  end
+
+  defp generate_message_id(realm, device_id, timestamp) do
+    realm_trunc = String.slice(realm, 0..63)
+    device_id_trunc = String.slice(device_id, 0..15)
+    timestamp_hex_str = Integer.to_string(timestamp, 16)
+    rnd = Enum.random(0..@max_rand) |> Integer.to_string(16)
+
+    "#{realm_trunc}-#{device_id_trunc}-#{timestamp_hex_str}-#{rnd}"
   end
 end
