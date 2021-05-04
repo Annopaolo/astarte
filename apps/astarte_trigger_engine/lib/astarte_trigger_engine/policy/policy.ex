@@ -6,6 +6,7 @@ defmodule Astarte.TriggerEngine.Policy do
   alias Astarte.Core.Triggers.Policy
   alias Astarte.Core.Triggers.PolicyProtobuf.Policy, as: PolicyProto
   alias Astarte.TriggerEngine.Config
+  alias Astarte.TriggerEngine.Policy.Queries
   alias AMQP.Basic
 
   @consumer Config.events_consumer!()
@@ -149,27 +150,14 @@ defmodule Astarte.TriggerEngine.Policy do
   end
 
   defp retrieve_policy_data(realm_name, policy_name) do
-    retrieve_statement =
-      "SELECT value FROM #{realm_name}.kv_store WHERE group='trigger_policy' AND key=:policy_name;"
-
-    with {:ok, prepared} <-
-           Xandra.Cluster.prepare(:xandra, retrieve_statement),
-         {:ok, %Xandra.Page{} = page} <-
-           Xandra.Cluster.execute(:xandra, prepared, %{"policy_name" => policy_name}),
-         [%{"value" => policy_data}] <- Enum.to_list(page),
+    with {:ok, policy_data} <- Queries.retrieve_policy_data(realm_name, policy_name),
          policy_proto <- PolicyProto.decode(policy_data),
          {:ok, policy} <- Policy.from_policy_proto(policy_proto) do
       {:ok, policy}
-      # with {:ok, client} <- Database.connect(realm: realm_name) do
-      #   {:ok, client}
     else
-      {:error, :database_connection_error} ->
-        Logger.warn("Database connection error.")
-        {:error, :database_connection_error}
-
       error ->
-        Logger.warn("Error while processing event: #{inspect(error)}")
-        {:error, :event_processing_error}
+        Logger.warn("Error while retrieving policy: #{inspect(error)}")
+        {:error, :policy_retrieving_error}
     end
   end
 

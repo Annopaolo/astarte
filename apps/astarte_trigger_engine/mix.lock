@@ -1,7 +1,7 @@
 %{
   "amqp": {:hex, :amqp, "1.6.0", "736d976f53780bcee72ccc50f7eb36e3d5881354480b1e34ceac84e3bbd954e9", [:mix], [{:amqp_client, "~> 3.8.0", [hex: :amqp_client, repo: "hexpm", optional: false]}], "hexpm", "b8168919ea1f1571a68349421e6501d1db7f559c4db3b8324ae90dbd3e2c1c4a"},
   "amqp_client": {:hex, :amqp_client, "3.8.14", "7569517aefb47e0d1c41bca2f4768dc8a2d88487daf7819fecca0d78943f293c", [:make, :rebar3], [{:rabbit_common, "3.8.14", [hex: :rabbit_common, repo: "hexpm", optional: false]}], "hexpm", "e5ba3ac18abbe34a1d990a6bcac25633dc7061ab8f8d101c7dcff97f49f4c523"},
-  "astarte_core": {:git, "https://github.com/annopaolo/astarte_core.git", "5070e1763279163df292652f24c3e520c1584b8a", [branch: "delivery_policy"]},
+  "astarte_core": {:git, "https://github.com/annopaolo/astarte_core.git", "3a9af60f30f9e86911f64ecb7aa65776f32dad21", [branch: "delivery_policy"]},
   "astarte_data_access": {:git, "https://github.com/astarte-platform/astarte_data_access.git", "66803d3c60329e3be79be8dba4e883ba9df7e327", []},
   "bbmustache": {:hex, :bbmustache, "1.11.0", "a6dbfc5cee3e1d7d17aad5f5b8880b4508d974611da8d73e1f6c28bde65d4c47", [:rebar3], [], "hexpm", "7c9cdcf58dc043377ab792a8c7109d8902695fcae3b35c1078a8b38ddcf86e5f"},
   "castore": {:hex, :castore, "0.1.9", "eb08a94c12ebff92a92d844c6ccd90728dc7662aab9bdc8b3b785ba653c499d5", [:mix], [], "hexpm", "99c3a38ad9c0bab03fee1418c98390da1a31f3b85e317db5840d51a1443d26c8"},
