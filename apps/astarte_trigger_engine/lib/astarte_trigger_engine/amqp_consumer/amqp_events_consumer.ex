@@ -26,14 +26,36 @@ defmodule Astarte.TriggerEngine.AMQPEventsConsumer do
   alias AMQP.Exchange
   alias AMQP.Queue
   alias Astarte.TriggerEngine.Config
-  alias Astarte.TriggerEngine.Policy
+  alias Astarte.TriggerEngine
   alias Astarte.TriggerEngine.Policy.PolicySupervisor
+  alias Astarte.Core.Triggers.Policy
 
   @connection_backoff 10000
   # API
-
   def start_link(args \\ []) do
-    GenServer.start_link(__MODULE__, args, name: __MODULE__)
+    with {:ok, realm_name} <- Keyword.fetch(args, :realm_name),
+         {:ok, policy} <- Keyword.fetch(args, :policy),
+         {:ok, pid} <-
+           GenServer.start_link(__MODULE__, args, name: via_tuple(realm_name, policy.name)) do
+      _ =
+        Logger.info(
+          "Started AMQPEventsConsumer for policy #{policy.name} of realm #{realm_name}}"
+        )
+
+      {:ok, pid}
+    else
+      :error ->
+        # Missing realm or policy in args
+        {:error, :no_realm_or_policy_name}
+
+      {:error, {:already_started, pid}} ->
+        # Already started, we don't care
+        {:ok, pid}
+
+      other ->
+        # Relay everything else
+        other
+    end
   end
 
   def ack(delivery_tag) do
@@ -42,9 +64,9 @@ defmodule Astarte.TriggerEngine.AMQPEventsConsumer do
 
   # Server callbacks
 
-  def init(_args) do
+  def init(realm_name: realm_name, policy: policy) do
     send(self(), :try_to_connect)
-    {:ok, %{channel: nil}}
+    {:ok, %{channel: nil, realm_name: realm_name, policy: policy}}
   end
 
   def terminate(_reason, state) do
@@ -79,8 +101,11 @@ defmodule Astarte.TriggerEngine.AMQPEventsConsumer do
     {:noreply, state}
   end
 
-  # Message consumed
-  def handle_info({:basic_deliver, payload, meta}, state) do
+  # Message consumed TODO
+  def handle_info(
+        {:basic_deliver, payload, meta},
+        %{realm_name: realm_name, policy: policy} = state
+      ) do
     {headers, other_meta} = Map.pop(meta, :headers, [])
     headers_map = amqp_headers_to_map(headers)
 
@@ -90,32 +115,36 @@ defmodule Astarte.TriggerEngine.AMQPEventsConsumer do
       }"
     )
 
-    {realm_name, policy_name} = get_headers_map_trigger_info(headers_map)
-    policy_process = get_policy_process(realm_name, policy_name)
-    Policy.handle_event(policy_process, payload, meta, state.channel)
+    # {realm_name, policy_name} = get_headers_map_trigger_info(headers_map)
+    policy_process = get_policy_process(realm_name, policy)
+    TriggerEngine.Policy.handle_event(policy_process, payload, meta, state.channel)
 
     {:noreply, state}
   end
 
-  def handle_info(:try_to_connect, _state) do
-    {:ok, new_state} = connect()
-    {:noreply, new_state}
+  def handle_info(:try_to_connect, %{realm_name: realm_name, policy: policy} = state) do
+    {:ok, %{channel: chan}} = connect(realm_name, policy)
+
+    {:noreply, %{realm_name: realm_name, policy: policy, channel: chan}}
   end
 
-  def handle_info({:DOWN, _, :process, _pid, reason}, _state) do
+  def handle_info(
+        {:DOWN, _, :process, _pid, reason},
+        %{realm_name: realm_name, policy: policy} = state
+      ) do
     Logger.warn("RabbitMQ connection lost: #{inspect(reason)}. Trying to reconnect...")
-    {:ok, new_state} = connect()
-    {:noreply, new_state}
+    {:ok, chan} = connect(realm_name, policy)
+    {:noreply, Enum.into(state, chan)}
   end
 
-  defp connect() do
+  defp connect(realm, policy) do
     with amqp_consumer_options = Config.amqp_consumer_options!(),
          {:ok, conn} <- Connection.open(amqp_consumer_options),
          {:ok, chan} <- Channel.open(conn),
          :ok <- Basic.qos(chan, prefetch_count: Config.amqp_consumer_prefetch_count!()),
          events_exchange_name = Config.events_exchange_name!(),
-         events_queue_name = Config.events_queue_name!(),
-         events_routing_key = Config.events_routing_key!(),
+         events_queue_name = generate_queue_name(realm, policy.name),
+         events_routing_key = generate_routing_key(realm, policy.name),
          :ok <- Exchange.declare(chan, events_exchange_name, :direct, durable: true),
          {:ok, _queue} <- Queue.declare(chan, events_queue_name, durable: true),
          :ok <-
@@ -123,12 +152,12 @@ defmodule Astarte.TriggerEngine.AMQPEventsConsumer do
              chan,
              events_queue_name,
              events_exchange_name,
-             routing_key: events_routing_key
+             routing_key: events_routing_key,
+             arguments: [{"x-queue-mode", :longstr, "lazy"} | generate_policy_x_args(policy)]
            ),
          {:ok, _consumer_tag} <- Basic.consume(chan, events_queue_name),
          # Get notifications when the chan or conn go down
          Process.monitor(chan.pid) do
-      # TODO add policy to state
       {:ok, %{channel: chan}}
     else
       {:error, reason} ->
@@ -141,6 +170,24 @@ defmodule Astarte.TriggerEngine.AMQPEventsConsumer do
         retry_after(@connection_backoff)
         {:ok, %{channel: nil}}
     end
+  end
+
+  defp generate_policy_x_args(policy) do
+    capacity = {"x-max-length", :signedint, policy.maximum_capacity}
+
+    if policy.event_ttl != nil do
+      [{"x-message-ttl", :signedint, policy.event_ttl}, capacity]
+    else
+      [capacity]
+    end
+  end
+
+  defp generate_queue_name(realm, policy) do
+    "#{realm}_#{policy}_queue"
+  end
+
+  defp generate_routing_key(realm, policy) do
+    "#{realm}_#{policy}"
   end
 
   defp retry_after(backoff) when is_integer(backoff) do
@@ -161,15 +208,19 @@ defmodule Astarte.TriggerEngine.AMQPEventsConsumer do
     end
   end
 
-  defp get_policy_process(realm, policy_name) do
-    case Registry.lookup(Registry.PolicyRegistry, {realm, policy_name}) do
+  defp get_policy_process(realm_name, policy) do
+    case Registry.lookup(Registry.PolicyRegistry, {realm_name, policy.name}) do
       [] ->
-        child = {Policy, [realm_name: realm, policy_name: policy_name]}
+        child = {TriggerEngine.Policy, [realm_name: realm_name, policy: policy]}
         {:ok, pid} = PolicySupervisor.start_child(child)
         pid
 
       [{pid, nil}] ->
         pid
     end
+  end
+
+  defp via_tuple(realm_name, policy_name) do
+    {:via, Registry, {Registry.AMQPConsumerRegistry, {realm_name, policy_name}}}
   end
 end

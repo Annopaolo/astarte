@@ -17,143 +17,107 @@
 #
 
 defmodule Astarte.TriggerEngine.AMQPEventsConsumerTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case
+  require Logger
   import Mox
   alias Astarte.TriggerEngine.AMQPEventsConsumer
   alias Astarte.TriggerEngine.Config
-  alias AMQP.{Basic, Channel, Connection}
+  alias AMQP.{Basic, Channel, Connection, Queue}
   alias Astarte.TriggerEngine.DatabaseTestHelper
+  alias Astarte.Core.Triggers.Policy, as: PolicyStruct
+
+  @realm_name DatabaseTestHelper.test_realm()
 
   @payload "some_payload"
-  @payload2 "some_other_payload"
-  @headers [
-    one: "header",
-    another: "different header",
-    number: 42,
-    x_astarte_realm: DatabaseTestHelper.test_realm(),
-    x_astarte_trigger_policy: "apolicy"
-  ]
-  @headers2 [
-    different: "headers",
-    anothernumber: 100,
-    x_astarte_realm: DatabaseTestHelper.test_realm(),
-    x_astarte_trigger_policy: "anotherpolicy"
-  ]
+  @message_id "message_id"
+  @headers [some: "headers"]
 
-  setup_all do
-    :ok = DatabaseTestHelper.create_db()
-    :ok = DatabaseTestHelper.populate_policies_db()
+  @a_policy %{
+    name: "a_policy",
+    retry_times: 1,
+    maximum_capacity: 100,
+    error_handlers: [
+      %{on: "any_error", strategy: "retry"}
+    ]
+  }
+
+  setup_all [:setup_amqp_consumer_process, :get_amqp_channel]
+  setup [:set_mox_global]
+
+  test "Consumes an event with a policy process", %{channel: chan} do
+    MockEventsConsumer
+    |> expect(:consume, 1, fn _, _ ->
+      :ok
+    end)
+
+    routing_key = generate_routing_key(@realm_name, @a_policy.name)
+
+    assert :ok == produce_event(chan, routing_key, @payload, @headers, @message_id)
+
+    # Leave time for the consumer to spawn the policy
     :timer.sleep(1000)
 
-    on_exit(fn ->
-      DatabaseTestHelper.drop_db()
-    end)
+    registered_policies =
+      Registry.select(Registry.PolicyRegistry, [{{:"$1", :_, :_}, [], [:"$1"]}])
+
+    assert {@realm_name, @a_policy.name} in registered_policies
+
+    # Leave time for the policy to ack
+    :timer.sleep(1000)
   end
 
-  describe "AMQP message consuming" do
-    setup [:set_mox_global, :create_and_drop_amqp]
+  test "AMQP queue has only one consumer", %{channel: chan} do
+    routing_key = generate_routing_key(@realm_name, @a_policy.name)
+    queue_name = generate_queue_name(@realm_name, @a_policy.name)
 
-    test "calls EventsConsumer when receiving an event", %{chan: chan} do
-      map_headers =
-        Enum.reduce(@headers, %{}, fn {k, v}, acc ->
-          Map.put(acc, to_string(k), v)
-        end)
-
-      map_headers2 =
-        Enum.reduce(@headers2, %{}, fn {k, v}, acc ->
-          Map.put(acc, to_string(k), v)
-        end)
-
-      MockEventsConsumer
-      |> expect(:consume, 2, fn _, _ ->
-        :ok
-      end)
-
-      assert :ok == produce_event(chan, @payload, @headers, "message1")
-      assert :ok == produce_event(chan, @payload2, @headers2, "message2")
-      # Leave time for the consumer to ack
-      :timer.sleep(1000)
-    end
-
-    test "different policy headers lead to different policy processes", %{chan: chan} do
-      map_headers =
-        Enum.reduce(@headers, %{}, fn {k, v}, acc ->
-          Map.put(acc, to_string(k), v)
-        end)
-
-      map_headers2 =
-        Enum.reduce(@headers2, %{}, fn {k, v}, acc ->
-          Map.put(acc, to_string(k), v)
-        end)
-
-      MockEventsConsumer
-      |> expect(:consume, 2, fn _, _ ->
-        :ok
-      end)
-
-      assert :ok == produce_event(chan, @payload, @headers, "message1")
-      assert :ok == produce_event(chan, @payload2, @headers2, "message2")
-      # Leave time for the consumer to ack
-      :timer.sleep(1000)
-
-      registered_policies =
-        Registry.select(Registry.PolicyRegistry, [{{:"$1", :_, :_}, [], [:"$1"]}])
-
-      assert [
-               {DatabaseTestHelper.test_realm(), "apolicy"},
-               {DatabaseTestHelper.test_realm(), "anotherpolicy"}
-             ]
-             |> Enum.map(fn e -> Enum.member?(registered_policies, e) end)
-    end
+    assert {:ok, %{queue: ^queue_name, message_count: _message_count, consumer_count: 1}} =
+             Queue.declare(chan, queue_name, passive: true)
   end
 
-  defp create_and_drop_amqp(_context) do
-    {conn, chan} = create_amqp_conn_and_chan()
+  defp setup_amqp_consumer_process(_context) do
+    policy =
+      PolicyStruct.changeset(%PolicyStruct{}, @a_policy)
+      |> Ecto.Changeset.apply_action!(:insert)
 
-    on_exit(fn -> drop_amqp_chan_and_conn(chan, conn) end)
+    {:ok, pid} = start_supervised({AMQPEventsConsumer, [realm_name: @realm_name, policy: policy]})
 
-    {:ok, chan: chan}
+    %{process_id: pid}
   end
 
-  defp create_amqp_conn_and_chan() do
-    :ok = wait_for_connection()
-
-    amqp_consumer_options = Config.amqp_consumer_options!()
-
-    {:ok, conn} = Connection.open(amqp_consumer_options)
-
-    {:ok, chan} = Channel.open(conn)
-
-    {conn, chan}
+  defp get_amqp_channel(%{process_id: pid}) do
+    {:ok, chan} = wait_for_connection(pid)
+    %{process_id: pid, channel: chan}
   end
 
-  defp wait_for_connection(retry_count \\ 0)
+  defp wait_for_connection(_pid, retry_count \\ 0)
 
   # Avoid endless waiting (retry_count > 50 ~= 5 seconds)
-  defp wait_for_connection(retry_count) when retry_count > 50 do
+  defp wait_for_connection(_pid, retry_count) when retry_count > 50 do
     {:error, :not_connected}
   end
 
-  defp wait_for_connection(retry_count) do
-    %{channel: chan} = :sys.get_state(AMQPEventsConsumer)
+  defp wait_for_connection(pid, retry_count) do
+    %{channel: chan} = :sys.get_state(pid)
 
     if chan do
-      :ok
+      {:ok, chan}
     else
       :timer.sleep(100)
-      wait_for_connection(retry_count + 1)
+      wait_for_connection(pid, retry_count + 1)
     end
   end
 
-  defp produce_event(chan, payload, headers, message_id) do
+  defp produce_event(chan, routing_key, payload, headers, message_id) do
     exchange = Config.events_exchange_name!()
-    routing_key = Config.events_routing_key!()
 
     Basic.publish(chan, exchange, routing_key, payload, headers: headers, message_id: message_id)
   end
 
-  defp drop_amqp_chan_and_conn(chan, conn) do
-    Channel.close(chan)
-    Connection.close(conn)
+  defp generate_queue_name(realm, policy) do
+    "#{realm}_#{policy}_queue"
+  end
+
+  defp generate_routing_key(realm, policy) do
+    "#{realm}_#{policy}"
   end
 end

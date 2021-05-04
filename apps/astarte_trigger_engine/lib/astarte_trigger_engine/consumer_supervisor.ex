@@ -16,13 +16,12 @@
 # limitations under the License.
 #
 
-defmodule Astarte.TriggerEngine.DeliverySupervisor do
-  @moduledoc false
+defmodule Astarte.TriggerEngine.ConsumerSupervisor do
+  # Automatically defines child_spec/1
   use Supervisor
   require Logger
 
-  alias Astarte.TriggerEngine.RetrySupervisor
-  alias Astarte.TriggerEngine.ConsumerSupervisor
+  alias Astarte.TriggerEngine.AMQPConsumer.{AMQPConsumerSupervisor, AMQPConsumerTracker}
 
   def start_link(init_arg) do
     Supervisor.start_link(__MODULE__, init_arg, name: __MODULE__)
@@ -35,13 +34,14 @@ defmodule Astarte.TriggerEngine.DeliverySupervisor do
       {&:logger_filters.domain/2, {:stop, :equal, [:progress]}}
     )
 
-    Logger.info("Starting delivery supervisor", tag: "delivery_supervisor_start")
+    Logger.info("Starting consumer supervisor", tag: "consumer_supervisor_start")
 
     children = [
-      RetrySupervisor,
-      ConsumerSupervisor
+      AMQPConsumerSupervisor,
+      {Registry, [keys: :unique, name: Registry.AMQPConsumerRegistry]},
+      AMQPConsumerTracker
     ]
 
-    Supervisor.init(children, strategy: :one_for_one)
+    Supervisor.init(children, strategy: :rest_for_one)
   end
 end
