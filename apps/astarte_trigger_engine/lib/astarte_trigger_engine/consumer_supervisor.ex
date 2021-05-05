@@ -3,8 +3,7 @@ defmodule Astarte.TriggerEngine.ConsumerSupervisor do
   use Supervisor
   require Logger
 
-  alias Astarte.TriggerEngine.AMQPConsumerSupervisor
-  alias Astarte.TriggerEngine.AMQPConsumerTracker
+  alias Astarte.TriggerEngine.AMQPConsumer
 
   def start_link(init_arg) do
     Supervisor.start_link(__MODULE__, init_arg, name: __MODULE__)
@@ -20,9 +19,9 @@ defmodule Astarte.TriggerEngine.ConsumerSupervisor do
     Logger.info("Starting consumer supervisor", tag: "consumer_supervisor_start")
 
     children = [
-      AMQPConsumerSupervisor,
+      AMQPConsumer.Supervisor,
       {Registry, [keys: :unique, name: Registry.AMQPConsumerRegistry]},
-      AMQPConsumerTracker
+      AMQPConsumer.Tracker
     ]
 
     Supervisor.init(children, strategy: :rest_for_one)

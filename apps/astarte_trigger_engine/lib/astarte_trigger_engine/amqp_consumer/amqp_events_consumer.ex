@@ -31,9 +31,25 @@ defmodule Astarte.TriggerEngine.AMQPEventsConsumer do
 
   @connection_backoff 10000
   # API
-
   def start_link(args \\ []) do
-    GenServer.start_link(__MODULE__, args, name: __MODULE__)
+    with {:ok, realm_name} <- Keyword.fetch(args, :realm_name),
+         {:ok, policy_name} <- Keyword.fetch(args, :policy_name),
+         {:ok, pid} <-
+           GenServer.start_link(__MODULE__, args, name: via_tuple(realm_name, policy_name)) do
+      {:ok, pid}
+    else
+      :error ->
+        # Missing realm or policy in args
+        {:error, :no_realm_or_policy_name}
+
+      {:error, {:already_started, pid}} ->
+        # Already started, we don't care
+        {:ok, pid}
+
+      other ->
+        # Relay everything else
+        other
+    end
   end
 
   def ack(delivery_tag) do
@@ -42,7 +58,8 @@ defmodule Astarte.TriggerEngine.AMQPEventsConsumer do
 
   # Server callbacks
 
-  def init(_args) do
+  # Connect to the right queue with the right routing key!
+  def init(realm_name: realm_name, policy_name: policy_name) do
     send(self(), :try_to_connect)
     {:ok, %{channel: nil}}
   end
@@ -171,5 +188,9 @@ defmodule Astarte.TriggerEngine.AMQPEventsConsumer do
       [{pid, nil}] ->
         pid
     end
+  end
+
+  defp via_tuple(realm_name, policy_name) do
+    {:via, Registry, {Registry.AMQPConsumerRegistry, {realm_name, policy_name}}}
   end
 end

@@ -1,4 +1,4 @@
-defmodule Astarte.TriggerEngine.AMQPConsumerSupervisor do
+defmodule Astarte.TriggerEngine.AMQPConsumer.Supervisor do
   require Logger
   use DynamicSupervisor
 
