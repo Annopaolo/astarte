@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## [1.1] - Unreleased
+### Added
+- [astarte_trigger_engine] Add a customizable HTTP payload redelivery mechanism via
+  trigger policies (see [#554](https://github.com/astarte-platform/astarte/issues/554)).
+
 ## [1.0.0-beta.2] - 2021-03-24
 ### Fixed
 - [astarte_e2e] Fix alerting mechanism preventing "unknown" failures to be raised or linked.

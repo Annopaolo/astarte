@@ -1,10 +1,25 @@
+#
+# This file is part of Astarte.
+#
+# Copyright 2021 Ispirata Srl
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
 defmodule Astarte.DataUpdaterPlant.Triggers.PolicyRetriever do
   use GenServer
 
   require Logger
-  # alias Astarte.DataAccess.Database
-  # alias CQEx.Query, as: DatabaseQuery
-  # alias CQEx.Result, as: DatabaseResult
 
   # API
   def start_link(args \\ []) do
@@ -29,7 +44,7 @@ defmodule Astarte.DataUpdaterPlant.Triggers.PolicyRetriever do
           {:reply, policy_name, Map.put(state, {realm_id, trigger_id}, policy_name)}
         else
           {:error, _error} ->
-            Logger.warn(
+            Logger.info(
               "Policy name for trigger #{trigger_id} not found, reverting to default policy"
             )
 
@@ -42,13 +57,33 @@ defmodule Astarte.DataUpdaterPlant.Triggers.PolicyRetriever do
   end
 
   defp retrieve_policy_name(realm_id, trigger_id) do
+    with {:ok, policy_name} <-
+           Xandra.Cluster.run(:xandra, fn conn ->
+             do_retrieve_policy_name(conn, realm_id, trigger_id)
+           end) do
+      {:ok, policy_name}
+    else
+      {:error, reason} ->
+        _ =
+          Logger.warn(
+            "Error while fetching policy for trigger #{trigger_id} in realm #{realm_id}: #{
+              inspect(reason)
+            }.",
+            tag: "retrieve_policy_name_failed"
+          )
+
+        {:error, reason}
+    end
+  end
+
+  defp do_retrieve_policy_name(conn, realm_name, trigger_id) do
     retrieve_statement =
-      "SELECT value FROM #{realm_id}.kv_store WHERE group='trigger_to_policy' AND key=:trigger_id;"
+      "SELECT value FROM #{realm_name}.kv_store WHERE group='trigger_to_policy' AND key=:trigger_id;"
 
     with {:ok, prepared} <-
-           Xandra.Cluster.prepare(:xandra, retrieve_statement),
+           Xandra.prepare(conn, retrieve_statement),
          {:ok, %Xandra.Page{} = page} <-
-           Xandra.Cluster.execute(:xandra, prepared, %{"trigger_id" => trigger_id}),
+           Xandra.execute(conn, prepared, %{"trigger_id" => trigger_id}),
          [%{"value" => policy_name}] <- Enum.to_list(page) do
       {:ok, policy_name}
     else
@@ -57,7 +92,7 @@ defmodule Astarte.DataUpdaterPlant.Triggers.PolicyRetriever do
         {:error, :database_connection_error}
 
       error ->
-        Logger.warn("Error while fetching policy for trigger #{trigger_id}: #{inspect(error)}")
+        Logger.warn("Error while fetching policy, #{inspect(error)}")
         {:error, :event_processing_error}
     end
   end

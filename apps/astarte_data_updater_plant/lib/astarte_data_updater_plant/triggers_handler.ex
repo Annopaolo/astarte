@@ -20,7 +20,6 @@ defmodule Astarte.DataUpdaterPlant.TriggersHandler do
   use Bitwise, only_operators: true
   require Logger
   alias Astarte.DataUpdaterPlant.Config
-  alias Astarte.DataUpdaterPlant.Triggers.PolicyRetriever
 
   @moduledoc """
   This module handles the triggers by generating the events requested
@@ -34,6 +33,7 @@ defmodule Astarte.DataUpdaterPlant.TriggersHandler do
 
   alias Astarte.Core.Triggers.SimpleTriggersProtobuf.AMQPTriggerTarget
   alias Astarte.DataUpdaterPlant.AMQPEventsProducer
+  alias Astarte.DataUpdaterPlant.Triggers.PolicyRetriever
 
   def register_target(%AMQPTriggerTarget{exchange: nil} = _target) do
     # Default exchange, no need to declare it
@@ -485,17 +485,17 @@ defmodule Astarte.DataUpdaterPlant.TriggersHandler do
       |> :uuid.uuid_to_string()
       |> to_string()
 
-    policy_name_str = PolicyRetriever.get_policy_name(simple_event.realm, parent_trigger_id_str)
-
     headers = [
       {"x_astarte_realm", simple_event.realm},
       {"x_astarte_device_id", simple_event.device_id},
       {"x_astarte_simple_trigger_id", simple_trigger_id_str},
       {"x_astarte_parent_trigger_id", parent_trigger_id_str},
-      {"x_astarte_event_type", to_string(event_type)},
-      {"x_astarte_trigger_policy", policy_name_str}
+      {"x_astarte_event_type", to_string(event_type)}
       | static_headers
     ]
+
+    {routing_key, headers} =
+      update_if_http_trigger(routing_key, headers, simple_event.realm, parent_trigger_id_str)
 
     opts_with_nil = [
       expiration: message_expiration_ms && to_string(message_expiration_ms),
@@ -510,6 +510,8 @@ defmodule Astarte.DataUpdaterPlant.TriggersHandler do
     payload = SimpleEvent.encode(simple_event)
 
     result = wait_ok_publish(exchange, routing_key, payload, [{:headers, headers} | opts])
+
+    Logger.debug("headers: #{inspect(headers)}, routing key: #{inspect(routing_key)}")
 
     :telemetry.execute(
       [:astarte, :data_updater_plant, :triggers_handler, :published_event],
@@ -530,5 +532,36 @@ defmodule Astarte.DataUpdaterPlant.TriggersHandler do
     rnd = Enum.random(0..@max_rand) |> Integer.to_string(16)
 
     "#{realm_trunc}-#{device_id_trunc}-#{timestamp_hex_str}-#{rnd}"
+  end
+
+  defp update_if_http_trigger(
+         "trigger_engine",
+         headers,
+         realm,
+         parent_trigger_id_str
+       ) do
+    policy_name = PolicyRetriever.get_policy_name(realm, parent_trigger_id_str)
+
+    headers = [
+      {"x_astarte_trigger_policy", policy_name}
+      | headers
+    ]
+
+    routing_key = generate_routing_key(realm, policy_name)
+
+    {routing_key, headers}
+  end
+
+  defp update_if_http_trigger(
+         routing_key,
+         headers,
+         _realm,
+         _parent_trigger_id_str
+       ) do
+    {routing_key, headers}
+  end
+
+  defp generate_routing_key(realm, policy) do
+    "#{realm}_#{policy}"
   end
 end
