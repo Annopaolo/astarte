@@ -21,14 +21,13 @@ defmodule Astarte.TriggerEngine.AMQPConsumer.Queries do
 
   defp do_list_policies(conn, realm_name) do
     # warning
-    list_policies_statement =
-      "SELECT key FROM #{realm_name}.kv_store WHERE group='trigger_policy';"
+    list_policies_statement = "SELECT * FROM #{realm_name}.kv_store WHERE group='trigger_policy';"
 
     with {:ok, prepared} <-
            Xandra.prepare(conn, list_policies_statement),
          {:ok, %Xandra.Page{} = page} <-
            Xandra.execute(conn, prepared, %{}),
-         policy_list <- Enum.map(page, &extract_key/1) do
+         policy_list <- Enum.map(page, &extract_name_and_data/1) do
       {:ok, policy_list}
     else
       {:error, %Xandra.Error{} = err} ->
@@ -74,7 +73,7 @@ defmodule Astarte.TriggerEngine.AMQPConsumer.Queries do
     end
   end
 
-  defp extract_key(%{"key" => value}) do
-    value
+  defp extract_name_and_data(%{"key" => name, "value" => data}) do
+    {name, data}
   end
 end

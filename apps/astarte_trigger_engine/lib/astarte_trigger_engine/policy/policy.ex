@@ -14,9 +14,9 @@ defmodule Astarte.TriggerEngine.Policy do
   # API
   def start_link(args \\ []) do
     with {:ok, realm_name} <- Keyword.fetch(args, :realm_name),
-         {:ok, policy_name} <- Keyword.fetch(args, :policy_name),
+         {:ok, policy} <- Keyword.fetch(args, :policy),
          {:ok, pid} <-
-           GenServer.start_link(__MODULE__, args, name: via_tuple(realm_name, policy_name)) do
+           GenServer.start_link(__MODULE__, args, name: via_tuple(realm_name, policy.name)) do
       {:ok, pid}
     else
       :error ->
@@ -51,42 +51,33 @@ defmodule Astarte.TriggerEngine.Policy do
   # Server callbacks
 
   # default (discard all) policy
-  def init(realm_name: _realm_name, policy_name: "@default") do
-    {:ok, %{policy: "@default"}}
+  # def init(realm_name: _realm_name, policy_name: "@default") do
+  #   {:ok, %{policy: "@default"}}
+  # end
+
+  def init(realm_name: _realm_name, policy: policy) do
+    state = %{policy: policy, retry_map: %{}}
+    {:ok, state}
   end
 
-  def init(realm_name: realm_name, policy_name: policy_name) do
-    state = %{realm_name: realm_name, policy_name: policy_name}
-    {:ok, state, {:continue, :fetch_from_database}}
-  end
+  # # default policy, always discard all
+  # def handle_cast(
+  #       {:handle_event, payload, meta, amqp_channel},
+  #       %{policy: "@default"} = state
+  #     ) do
+  #   {headers, other_meta} = Map.pop(meta, :headers, [])
+  #   headers_map = amqp_headers_to_map(headers)
 
-  def handle_continue(:fetch_from_database, state) do
-    with %{realm_name: realm_name, policy_name: policy_name} <- state,
-         {:ok, policy} <- retrieve_policy_data(realm_name, policy_name) do
-      {:noreply, %{policy: policy, retry_map: %{}}}
-    else
-      _ -> {:stop, :initialization_error, %{}}
-    end
-  end
+  #   Logger.debug(
+  #     "got event, payload: #{inspect(payload)}, headers: #{inspect(headers_map)}, meta: #{
+  #       inspect(other_meta)
+  #     }"
+  #   )
 
-  # default policy, always discard all
-  def handle_cast(
-        {:handle_event, payload, meta, amqp_channel},
-        %{policy: "@default"} = state
-      ) do
-    {headers, other_meta} = Map.pop(meta, :headers, [])
-    headers_map = amqp_headers_to_map(headers)
-
-    Logger.debug(
-      "got event, payload: #{inspect(payload)}, headers: #{inspect(headers_map)}, meta: #{
-        inspect(other_meta)
-      }"
-    )
-
-    @consumer.consume(payload, headers_map)
-    Basic.ack(amqp_channel, meta.delivery_tag)
-    {:noreply, state}
-  end
+  #   @consumer.consume(payload, headers_map)
+  #   Basic.ack(amqp_channel, meta.delivery_tag)
+  #   {:noreply, state}
+  # end
 
   def handle_cast(
         {:handle_event, payload, meta, amqp_channel},
@@ -146,18 +137,6 @@ defmodule Astarte.TriggerEngine.Policy do
       policy.retry_times == nil -> :no
       Map.get(retry_map, event_id) < policy.retry_times -> :ok
       true -> :no
-    end
-  end
-
-  defp retrieve_policy_data(realm_name, policy_name) do
-    with {:ok, policy_data} <- Queries.retrieve_policy_data(realm_name, policy_name),
-         policy_proto <- PolicyProto.decode(policy_data),
-         {:ok, policy} <- Policy.from_policy_proto(policy_proto) do
-      {:ok, policy}
-    else
-      error ->
-        Logger.warn("Error while retrieving policy: #{inspect(error)}")
-        {:error, :policy_retrieving_error}
     end
   end
 

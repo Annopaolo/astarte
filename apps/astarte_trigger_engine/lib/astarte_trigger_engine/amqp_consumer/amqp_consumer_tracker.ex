@@ -30,6 +30,8 @@ defmodule Astarte.TriggerEngine.AMQPConsumer.Tracker do
   alias Astarte.TriggerEngine.AMQPConsumer.Queries
   alias Astarte.TriggerEngine.AMQPConsumer.Supervisor, as: AMQPConsumerSupervisor
   alias Astarte.TriggerEngine.AMQPEventsConsumer
+  alias Astarte.Core.Triggers.Policy
+  alias Astarte.Core.Triggers.PolicyProtobuf.Policy, as: PolicyProto
 
   # 10 minutes
   @update_timeout 60 * 10 * 1000
@@ -54,7 +56,11 @@ defmodule Astarte.TriggerEngine.AMQPConsumer.Tracker do
       Registry.select(Registry.AMQPConsumerRegistry, [{{:"$1", :_, :_}, [], [:"$1"]}])
 
     policies = fetch_all_policies_with_realms_list()
-    new_consumers = policies -- registered_consumers
+
+    new_consumers =
+      Enum.filter(policies, fn {realm, {policy_name, _policy_data}} ->
+        {realm, policy_name} in registered_consumers
+      end)
 
     _ =
       Logger.info(
@@ -72,8 +78,10 @@ defmodule Astarte.TriggerEngine.AMQPConsumer.Tracker do
     Process.send_after(__MODULE__, :update_consumers, @update_timeout)
   end
 
-  defp start_new_consumer({realm_name, policy_name}) do
-    child = {AMQPEventsConsumer, [realm_name: realm_name, policy_name: policy_name]}
+  defp start_new_consumer({realm_name, {_policy_name, policy_data}}) do
+    policy = policy_data |> PolicyProto.decode() |> Policy.from_policy_proto!()
+    child = {AMQPEventsConsumer, [realm_name: realm_name, policy: policy]}
+
     {:ok, _pid} = AMQPConsumerSupervisor.start_child(child)
     # add pid to registry: this is done in start_link of amqpeventsconsumer
   end
@@ -81,15 +89,38 @@ defmodule Astarte.TriggerEngine.AMQPConsumer.Tracker do
   defp fetch_all_policies_with_realms_list() do
     with {:ok, realm_names} <- Queries.list_realms() do
       Enum.reduce(realm_names, [], fn realm_name, acc ->
-        policies = fetch_realm_policies_list(realm_name)
-        Enum.map(policies, fn x -> {realm_name, x} end) ++ acc
+        fetch_realm_policies_list(realm_name) ++ acc
       end)
     end
   end
 
   defp fetch_realm_policies_list(realm_name) do
+    policies = do_fetch_realm_policies_list(realm_name)
+    real_policies = Enum.map(policies, fn x -> {realm_name, x} end)
+    [{realm_name, generate_default_policy()} | real_policies]
+  end
+
+  defp do_fetch_realm_policies_list(realm_name) do
     with {:ok, policies_list} <- Queries.list_policies(realm_name) do
       policies_list
     end
+  end
+
+  # we need this because default policies
+  # cannot be installed
+  defp generate_default_policy() do
+    name = "@default"
+
+    {name,
+     %Policy{
+       name: name,
+       # revise
+       maximum_capacity: 100,
+       error_handlers: [
+         %{on: "any_error", strategy: "discard"}
+       ]
+     }
+     |> Policy.to_policy_proto()
+     |> PolicyProto.encode()}
   end
 end
