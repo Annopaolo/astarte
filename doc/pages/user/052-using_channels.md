@@ -1,12 +1,12 @@
-# Using Astarte Channels (WebSockets)
+# Astarte Channels (WebSockets)
 
 Especially when building Frontend applications, it is useful to receive real-time updates about data
-sent from Devices. Astarte leverages [Phoenix Channels](https://hexdocs.pm/phoenix/channels.html) to
+sent from Devices or Device state. Astarte leverages [Phoenix Channels](https://hexdocs.pm/phoenix/channels.html) to
 provide such a thing over [WebSockets](https://en.wikipedia.org/wiki/WebSocket) in AppEngine API.
 WebSockets can be used natively from a Web Browser and follow the same authentication pattern as a
-standard HTTP call.
+standard HTTP call. Note however that WebSockets provide a _different_ mechanism compared to REST API.
 
-Astarte Channels define a semantic on top of Phoenix Channels which allows read-only monitoring of
+Astarte Channels define a semantics on top of Phoenix Channels which allows read-only monitoring of
 `device` Interfaces. Authentication and Authorization over Channels happens in the very same way as
 `AppEngine`, and the `a_ch` claim in the token is respected when joining rooms and installing
 triggers. See [Authentication and Authorization](070-auth.html) for more details on Auth semantics
@@ -86,6 +86,9 @@ he will not get it, and there's no way he can retrieve it if he joined at a late
 Triggers can be uninstalled by issuing an `unwatch` event in the Channel. The payload of the event
 should be the name of the trigger which should be uninstalled.
 
+Currently, installing a transient trigger on an interface 
+with `aggregation: "object"` is not supported. 
+
 ### Group Triggers
 
 Transient triggers can also target an Astarte group instead of a single device. To install a group
@@ -129,7 +132,7 @@ user sees - if he is authorized to enter in a room, he will be capable of seeing
 in. More granular permissions can be done simply by creating more rooms in which different triggers
 will be installed.
 
-The `JOIN` verb has the following semantic: `JOIN::<regex>`, where regex matches a room name (the
+The `JOIN` verb has the following semantics: `JOIN::<regex>`, where regex matches a room name (the
 room name is what follows `rooms:<realm>:` - the realm is implicit in the context of the
 authorization token). For example, a user authorized with the `JOIN::test.*` claim in the `test`
 realm will be able to join, for example, `rooms:test:testthis`, `rooms:test:testme`,
@@ -150,3 +153,24 @@ implicitly defines which kind of triggers a user will be able to install. For ex
 triggers such as the one shown in the previous example, but won't let the user install device-wide
 triggers (such as connect/disconnect events). A claim such as `f0VMRgIBAQAAAAAAAAAAAA` or
 `f0VMRgIBAQAAAAAAAAAAAA.*`, instead, will allow device-level triggers to be installed.
+
+
+## Using Astarte Channels
+
+Astarte leverages [Phoenix Channels](https://hexdocs.pm/phoenix/channels.html) to provide real-time updates about data
+sent from Devices or Device state. Therefore Astarte Channels
+are usually managed via Javascript, importing the [Phoenix channels library](https://hexdocs.pm/phoenix/channels.html).
+
+First of all, open a channel (socket connection) to your Astarte instance.
+In order to prove that you're authorized to do so, you must provide 
+a token and a realm name. 
+For testing purposes, you can generate an all-authorizing token, through
+`astartectl utils gen-jwt all-realm-apis -k <your realm private key>`.
+
+Once the channel is open, you can join a room by providing  a regex that complies with JOIN rules [stated above](052-using_channels.html#JOIN). If the room is not present already, a new one will be created by Astarte before joining in.
+
+When in a room, it is possible to install a Transient Trigger within a room by issuing a `watch` event in the Channel. Rules for Transient Trigger formation can be found [above]((052-using_channels.html#managing-transient-triggers).
+Triggers can be uninstalled by issuing an `unwatch` event in the Channel. The payload of the event
+should be the name of the trigger which should be uninstalled.
+
+For a complete example, see the [Astarte channels example](https://github.com/astarte-platform/astarte/tree/master/examples/sensor-channels) on Github.

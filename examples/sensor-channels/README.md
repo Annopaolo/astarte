@@ -9,7 +9,7 @@ You can follow the walkthrough below if you wish to try it out: you will simulat
 
 For this example you should:
 
-1. have an Astarte instance up and running with a realm you have access to
+1. have an Astarte instance up and running (not in `localhost`) with a realm you have access to
 2. install the [example interfaces](../../standard-interfaces/) in the realm
 3. register a device that will use those interfaces in the realm; be sure to note down its device ID
    and Credentials Secret
