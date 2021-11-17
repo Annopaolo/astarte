@@ -424,10 +424,22 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Queries do
       |> DatabaseQuery.put(:device_id, device_id)
       |> DatabaseQuery.consistency(:local_quorum)
 
-    device_row =
-      DatabaseQuery.call!(db_client, device_row_query)
-      |> DatabaseResult.head()
+    DatabaseQuery.call!(db_client, device_row_query)
+    |> DatabaseResult.head()
+    |> convert_device_row_to_stats_and_introspection()
+  end
 
+  defp convert_device_row_to_stats_and_introspection(:empty_dataset) do
+    %{
+      introspection: %{},
+      total_received_msgs: 0,
+      total_received_bytes: 0,
+      initial_interface_exchanged_bytes: %{},
+      initial_interface_exchanged_msgs: %{}
+    }
+  end
+
+  defp convert_device_row_to_stats_and_introspection(device_row) do
     introspection_map = convert_map_result(device_row[:introspection])
 
     initial_interface_exchanged_bytes =
