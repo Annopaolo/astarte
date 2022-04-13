@@ -63,9 +63,18 @@ defmodule Astarte.TriggerEngine.EventsConsumer do
 
   defp handle_simple_event(realm, device_id, headers_map, event_type, event, timestamp_ms) do
     with {:ok, trigger_id} <- Map.fetch(headers_map, "x_astarte_parent_trigger_id"),
-         {:ok, action} <- retrieve_trigger_configuration(realm, trigger_id),
+         {:ok, trigger} <- retrieve_trigger_configuration(realm, trigger_id),
+         {:ok, action} <- Jason.decode(trigger.action),
          {:ok, payload} <-
-           event_to_payload(realm, device_id, event_type, event, action, timestamp_ms),
+           event_to_payload(
+             realm,
+             device_id,
+             trigger.name,
+             event_type,
+             event,
+             action,
+             timestamp_ms
+           ),
          {:ok, headers} <- event_to_headers(realm, device_id, event_type, event, action),
          :ok <- execute_action(payload, headers, action) do
       :telemetry.execute(
@@ -110,10 +119,11 @@ defmodule Astarte.TriggerEngine.EventsConsumer do
     end
   end
 
-  defp build_values_map(realm, device_id, event_type, event) do
+  defp build_values_map(realm, device_id, trigger_name, event_type, event) do
     base_values = %{
       "realm" => realm,
       "device_id" => device_id,
+      "trigger_name" => trigger_name,
       "event_type" => to_string(event_type)
     }
 
@@ -163,6 +173,7 @@ defmodule Astarte.TriggerEngine.EventsConsumer do
   defp event_to_payload(
          realm,
          device_id,
+         trigger_name,
          event_type,
          event,
          %{
@@ -171,16 +182,25 @@ defmodule Astarte.TriggerEngine.EventsConsumer do
          },
          _timestamp_ms
        ) do
-    values = build_values_map(realm, device_id, event_type, event)
+    values = build_values_map(realm, device_id, trigger_name, event_type, event)
 
     {:ok, :bbmustache.render(template, values, key_type: :binary)}
   end
 
-  defp event_to_payload(_realm, device_id, _event_type, event, _action, timestamp_ms) do
+  defp event_to_payload(
+         _realm,
+         device_id,
+         trigger_name,
+         _event_type,
+         event,
+         _action,
+         timestamp_ms
+       ) do
     with {:ok, timestamp} <- DateTime.from_unix(timestamp_ms, :millisecond) do
       %{
         "timestamp" => timestamp,
         "device_id" => device_id,
+        "trigger_name" => trigger_name,
         "event" => event
       }
       |> Jason.encode()
@@ -281,9 +301,8 @@ defmodule Astarte.TriggerEngine.EventsConsumer do
     with {:ok, client} <- Database.connect(realm: realm_name),
          {:ok, result} <- DatabaseQuery.call(client, query),
          [value: trigger_data] <- DatabaseResult.head(result),
-         trigger <- Trigger.decode(trigger_data),
-         {:ok, action} <- Jason.decode(trigger.action) do
-      {:ok, action}
+         trigger <- Trigger.decode(trigger_data) do
+      {:ok, trigger}
     else
       {:error, :database_connection_error} ->
         Logger.warn("Database connection error.")
