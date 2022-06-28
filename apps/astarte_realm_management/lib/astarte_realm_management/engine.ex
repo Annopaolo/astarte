@@ -38,6 +38,9 @@ defmodule Astarte.RealmManagement.Engine do
   alias Astarte.RealmManagement.Config
   alias CQEx.Client, as: DatabaseClient
 
+  # TODO: handle connection to AMQP broker
+  alias AMQP.Exchange
+
   def get_health() do
     _ = Logger.debug("Get health.")
 
@@ -518,7 +521,9 @@ defmodule Astarte.RealmManagement.Engine do
          t_container = build_trigger_target_container(trigger_target),
          :ok <- validate_simple_triggers(client, simple_trigger_maps),
          # TODO: these should be batched together
-         :ok <- install_simple_triggers(client, simple_trigger_maps, trigger_uuid, t_container) do
+         :ok <- install_simple_triggers(client, simple_trigger_maps, trigger_uuid, t_container),
+         # TODO: is this the right place for exchange creation?
+         :ok <- declare_trigger_exchange(trigger_target) do
       _ =
         Logger.info("Installing trigger.",
           trigger_name: trigger_name,
@@ -559,6 +564,13 @@ defmodule Astarte.RealmManagement.Engine do
       routing_key: "trigger_engine",
       parent_trigger_id: parent_uuid
     }
+  end
+
+  defp declare_trigger_exchange(%AMQPTriggerTarget{exchange: exchange}) do
+    # get a chan (let's sneak ExRabbitPool in there!)
+    ExRabbitPool.with_channel(:exchange_pool, fn chan ->
+      Exchange.declare(chan, exchange, :direct, durable: true)
+    end)
   end
 
   defp build_simple_trigger_maps(serialized_tagged_simple_triggers) do

@@ -48,7 +48,13 @@ defmodule Astarte.RealmManagement do
     children = [
       Astarte.RealmManagementWeb.Telemetry,
       {Xandra.Cluster, xandra_options},
-      {Astarte.RPC.AMQP.Server, [amqp_queue: Protocol.amqp_queue(), handler: Handler]}
+      {Astarte.RPC.AMQP.Server, [amqp_queue: Protocol.amqp_queue(), handler: Handler]},
+      {
+        ExRabbitPool.PoolSupervisor,
+        # TODO
+        rabbitmq_config: Config.amqp_producer_options!(),
+        connection_pools: [Config.pool_config!(:exchange_pool)]
+      }
     ]
 
     opts = [strategy: :one_for_one, name: Astarte.RealmManagement.Supervisor]
