@@ -122,15 +122,45 @@ defmodule Astarte.DataUpdaterPlant.TriggersHandler do
     |> dispatch_event(target)
   end
 
-  def incoming_introspection(targets, realm, device_id, introspection, timestamp)
+  def incoming_introspection(
+        targets,
+        realm,
+        device_id,
+        introspection_major_map,
+        introspection_minor_map,
+        timestamp
+      )
       when is_list(targets) do
     execute_all_ok(targets, fn target ->
-      incoming_introspection(target, realm, device_id, introspection, timestamp) == :ok
+      incoming_introspection(
+        target,
+        realm,
+        device_id,
+        introspection_major_map,
+        introspection_minor_map,
+        timestamp
+      ) == :ok
     end)
   end
 
-  def incoming_introspection(target, realm, device_id, introspection, timestamp) do
-    # TODO check that introspection is a string here
+  def incoming_introspection(
+        target,
+        realm,
+        device_id,
+        introspection_major_map,
+        introspection_minor_map,
+        timestamp
+      ) do
+    sorted_majors = Enum.sort(introspection_major_map)
+    sorted_minors = Enum.sort(introspection_minor_map)
+
+    # Make it a list of {interface_name, interface_version} pairs because ExProtobuf doesn't understand Elixir maps
+    introspection =
+      Enum.zip(sorted_majors, sorted_minors)
+      |> Enum.map(fn {{name, major}, {name, minor}} ->
+        {name, %InterfaceVersion{major: major, minor: minor}}
+      end)
+
     %IncomingIntrospectionEvent{introspection: introspection}
     |> make_simple_event(
       :incoming_introspection_event,

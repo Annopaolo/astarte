@@ -1090,7 +1090,8 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
       on_introspection_targets,
       realm,
       device_id_string,
-      payload,
+      db_introspection_map,
+      db_introspection_minor_map,
       timestamp_ms
     )
 

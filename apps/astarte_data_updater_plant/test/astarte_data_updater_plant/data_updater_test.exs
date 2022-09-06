@@ -25,6 +25,7 @@ defmodule Astarte.DataUpdaterPlant.DataUpdaterTest do
   alias Astarte.Core.Triggers.SimpleEvents.SimpleEvent
   alias Astarte.Core.Triggers.SimpleEvents.ValueChangeAppliedEvent
   alias Astarte.Core.Triggers.SimpleEvents.IncomingIntrospectionEvent
+  alias Astarte.Core.Triggers.SimpleEvents.InterfaceVersion
   alias Astarte.Core.Triggers.SimpleEvents.InterfaceAddedEvent
   alias Astarte.Core.Triggers.SimpleEvents.InterfaceRemovedEvent
   alias Astarte.Core.Triggers.SimpleEvents.InterfaceMinorUpdatedEvent
@@ -259,6 +260,19 @@ defmodule Astarte.DataUpdaterPlant.DataUpdaterTest do
       make_timestamp("2017-10-09T14:00:32+00:00")
     )
 
+    introspection_list =
+      existing_introspection_string
+      |> String.split(";")
+      |> Enum.map(fn e ->
+        [name, major, minor] = String.split(e, ":")
+
+        {name,
+         %InterfaceVersion{
+           major: String.to_integer(major),
+           minor: String.to_integer(minor)
+         }}
+      end)
+
     {incoming_event, incoming_headers, _meta} = AMQPTestHelper.wait_and_get_message()
     assert incoming_headers["x_astarte_event_type"] == "incoming_introspection_event"
     assert incoming_headers["x_astarte_device_id"] == encoded_device_id
@@ -270,12 +284,12 @@ defmodule Astarte.DataUpdaterPlant.DataUpdaterTest do
     assert :uuid.string_to_uuid(incoming_headers["x_astarte_simple_trigger_id"]) ==
              incoming_introspection_volatile_trigger_id
 
-    assert SimpleEvent.decode(incoming_event) == %SimpleEvent{
+    assert %SimpleEvent{
              device_id: encoded_device_id,
              event: {
                :incoming_introspection_event,
                %IncomingIntrospectionEvent{
-                 introspection: existing_introspection_string
+                 introspection: received_introspection_list
                }
              },
              timestamp: timestamp_ms,
@@ -283,14 +297,18 @@ defmodule Astarte.DataUpdaterPlant.DataUpdaterTest do
              realm: realm,
              simple_trigger_id: incoming_introspection_volatile_trigger_id,
              version: 1
-           }
+           } = SimpleEvent.decode(incoming_event)
+
+    assert received_introspection_list |> Enum.sort() == introspection_list |> Enum.sort()
 
     # Remove the incoming introspection trigger, don't curse next tests
-    assert DataUpdater.handle_delete_volatile_trigger(
-             realm,
-             encoded_device_id,
-             incoming_introspection_volatile_trigger_id
-           ) == :ok
+    assert(
+      DataUpdater.handle_delete_volatile_trigger(
+        realm,
+        encoded_device_id,
+        incoming_introspection_volatile_trigger_id
+      ) == :ok
+    )
 
     # Install a volatile interface added introspection test trigger
     interface_added_trigger_data =

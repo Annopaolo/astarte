@@ -65,7 +65,7 @@ defmodule Astarte.DataUpdaterPlant.Mixfile do
     [
       {:astarte_core,
        github: "Annopaolo/astarte_core",
-       branch: "introspection-triggers-to-device",
+       branch: "standardize-incoming-introspection",
        override: true},
       {:astarte_data_access, github: "astarte-platform/astarte_data_access"},
       {:astarte_rpc, github: "astarte-platform/astarte_rpc"}

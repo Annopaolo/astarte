@@ -270,7 +270,30 @@ defmodule Astarte.DataUpdaterPlant.TriggersHandlerTest do
       routing_key: @routing_key
     }
 
-    TriggersHandler.incoming_introspection(target, @realm, @device_id, @introspection, timestamp)
+    introspection_major = %{"com.My.Interface" => 1, "com.Another.Interface" => 1}
+    introspection_minor = %{"com.My.Interface" => 0, "com.Another.Interface" => 2}
+
+    introspection_list =
+      @introspection
+      |> String.split(";")
+      |> Enum.map(fn e ->
+        [name, major, minor] = String.split(e, ":")
+
+        {name,
+         %InterfaceVersion{
+           major: String.to_integer(major),
+           minor: String.to_integer(minor)
+         }}
+      end)
+
+    TriggersHandler.incoming_introspection(
+      target,
+      @realm,
+      @device_id,
+      introspection_major,
+      introspection_minor,
+      timestamp
+    )
 
     assert_receive {:event, payload, meta}
 
@@ -284,8 +307,10 @@ defmodule Astarte.DataUpdaterPlant.TriggersHandlerTest do
            } = SimpleEvent.decode(payload)
 
     assert %IncomingIntrospectionEvent{
-             introspection: @introspection
+             introspection: received_introspection
            } = incoming_introspection_event
+
+    assert received_introspection |> Enum.sort() == introspection_list |> Enum.sort()
 
     headers_map = amqp_headers_to_map(meta.headers)
 
