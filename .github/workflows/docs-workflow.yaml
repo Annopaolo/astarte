@@ -22,24 +22,30 @@ jobs:
     steps:
     # Checkout the source
     - uses: actions/checkout@v2
+      if: ${{ !contains(github.ref, 'tags') }}
       with:
         path: astarte
     # Checkout the docs repository
     - uses: actions/checkout@v2
+      if: ${{ !contains(github.ref, 'tags') }}
       with:
         repository: astarte-platform/docs
         path: docs
     - uses: erlef/setup-beam@v1.7.0
+      if: ${{ !contains(github.ref, 'tags') }}
       with:
         otp-version: "23.2"
         elixir-version: "1.11.4"
     - name: Install Dependencies
+      if: ${{ !contains(github.ref, 'tags') }}
       working-directory: ./astarte/doc
       run: mix deps.get
     - name: Build Docs
+      if: ${{ !contains(github.ref, 'tags') }}
       working-directory: ./astarte/doc
       run: mix docs
     - name: Copy Docs, preserving Device SDK docs
+      if: ${{ !contains(github.ref, 'tags') }}
       run: |
         export DOCS_DIRNAME="$(echo ${{ github.ref }} | sed 's,refs/heads/,,' | sed 's/master/snapshot/g' | sed 's/release-//g')"
         rm -rf docs/$DOCS_DIRNAME
@@ -48,12 +54,14 @@ jobs:
         cd docs && git restore $DOCS_DIRNAME/device-sdks || true && cd ..
         cp -r astarte/doc/doc/* docs/$DOCS_DIRNAME/
     - name: Checkout Swagger UI
+      if: ${{ !contains(github.ref, 'tags') }}
       uses: actions/checkout@v2
       with:
         repository: swagger-api/swagger-ui
         path: swagger-ui
         ref: 'v3.25.0'
     - name: Copy all Swagger UI files
+      if: ${{ !contains(github.ref, 'tags') }}
       run: |
         export DOCS_DIRNAME="$(echo ${{ github.ref }} | sed 's,refs/heads/,,' | sed 's/master/snapshot/g' | sed 's/release-//g')"
         mkdir docs/$DOCS_DIRNAME/api
@@ -61,6 +69,7 @@ jobs:
         rm docs/$DOCS_DIRNAME/api/index.html
         cp astarte/doc/swagger-ui-index.html docs/$DOCS_DIRNAME/api/index.html
     - name: Commit files
+      if: ${{ !contains(github.ref, 'tags') }}
       working-directory: ./docs
       run: |
         git config --local user.email "astarte-machine@ispirata.com"
@@ -68,6 +77,7 @@ jobs:
         git add .
         git commit -m "Update Documentation"
     - name: Push changes
+      if: ${{ !contains(github.ref, 'tags') }}
       working-directory: ./docs
       run: |
         eval `ssh-agent -t 60 -s`
