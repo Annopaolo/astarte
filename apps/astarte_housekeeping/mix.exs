@@ -72,8 +72,7 @@ defmodule Astarte.Housekeeping.Mixfile do
   defp astarte_required_modules(_) do
     [
       {:astarte_core, github: "astarte-platform/astarte_core", branch: "release-1.1"},
-      {:astarte_data_access,
-       github: "astarte-platform/astarte_data_access", branch: "release-1.1"},
+      {:astarte_data_access, github: "Annopaolo/astarte_data_access", branch: "use_xandra"},
       {:astarte_rpc, github: "astarte-platform/astarte_rpc", branch: "release-1.1"}
     ]
   end
