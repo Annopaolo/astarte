@@ -37,18 +37,18 @@ defmodule Astarte.RealmManagement.Queries do
   alias Astarte.Core.Triggers.SimpleTriggersProtobuf.TaggedSimpleTrigger
   alias Astarte.Core.Triggers.SimpleTriggersProtobuf.TriggerTargetContainer
   alias Astarte.Core.Triggers.Trigger
-  alias Astarte.Core.Triggers.PolicyProtobuf.PolicyProto
+  alias Astarte.DataAccess.Xandra.Utils
 
   @max_batch_queries 32
 
   @insert_into_interfaces """
-    INSERT INTO interfaces
+    INSERT INTO :realm_name.interfaces
       (name, major_version, minor_version, interface_id, storage_type, storage, type, ownership, aggregation, automaton_transitions, automaton_accepting_states, description, doc)
       VALUES (:name, :major_version, :minor_version, :interface_id, :storage_type, :storage, :type, :ownership, :aggregation, :automaton_transitions, :automaton_accepting_states, :description, :doc)
   """
 
   @create_datastream_individual_multiinterface_table """
-    CREATE TABLE IF NOT EXISTS individual_datastreams (
+    CREATE TABLE IF NOT EXISTS :realm_name.individual_datastreams (
       device_id uuid,
       interface_id uuid,
       endpoint_id uuid,
@@ -77,7 +77,7 @@ defmodule Astarte.RealmManagement.Queries do
   """
 
   @create_interface_table_with_object_aggregation """
-    CREATE TABLE :interface_name (
+    CREATE TABLE :realm_name.:interface_name (
       device_id uuid,
       path varchar,
 
@@ -92,12 +92,12 @@ defmodule Astarte.RealmManagement.Queries do
 
   @query_jwt_public_key_pem """
     SELECT blobAsVarchar(value)
-    FROM kv_store
+    FROM :realm_name.kv_store
     WHERE group='auth' AND key='jwt_public_key_pem';
   """
 
   @query_insert_jwt_public_key_pem """
-  INSERT INTO kv_store (group, key, value)
+  INSERT INTO :realm_name.kv_store (group, key, value)
   VALUES ('auth', 'jwt_public_key_pem', varcharAsBlob(:pem));
   """
 
@@ -111,6 +111,7 @@ defmodule Astarte.RealmManagement.Queries do
   end
 
   defp create_interface_table(
+         _realm_name,
          :individual,
          :multi,
          %InterfaceDescriptor{type: :properties},
@@ -120,16 +121,21 @@ defmodule Astarte.RealmManagement.Queries do
   end
 
   defp create_interface_table(
+         realm_name,
          :individual,
          :multi,
          %InterfaceDescriptor{type: :datastream},
          _mappings
        ) do
+    create_table_statement =
+      @create_datastream_individual_multiinterface_table
+      |> String.replace(":realm_name", realm_name)
+
     {:multi_interface_individual_datastream_dbtable, "individual_datastreams",
-     @create_datastream_individual_multiinterface_table}
+     create_table_statement}
   end
 
-  defp create_interface_table(:object, :one, interface_descriptor, mappings) do
+  defp create_interface_table(realm_name, :object, :one, interface_descriptor, mappings) do
     table_name =
       CQLUtils.interface_name_to_table_name(
         interface_descriptor.name,
@@ -149,6 +155,7 @@ defmodule Astarte.RealmManagement.Queries do
 
     create_table_statement =
       @create_interface_table_with_object_aggregation
+      |> String.replace(":realm_name", realm_name)
       |> String.replace(":interface_name", table_name)
       |> String.replace(":value_timestamp", value_timestamp)
       |> String.replace(":columns", columns)
@@ -157,30 +164,13 @@ defmodule Astarte.RealmManagement.Queries do
     {:one_object_datastream_dbtable, table_name, create_table_statement}
   end
 
-  defp execute_batch(queries) when length(queries) < @max_batch_queries do
+  defp execute_batch(queries, opts) when length(queries) < @max_batch_queries do
     Xandra.Cluster.run(:xandra, fn conn ->
-      do_execute_batch(conn, queries)
+      do_execute_batch(conn, queries, opts)
     end)
   end
 
-  defp do_execute_batch(conn, queries) do
-    batch =
-      Enum.reduce(queries, Xandra.Batch.new(:logged), fn {statement, params}, batch ->
-        Xandra.Batch.add(batch, statement, params)
-      end)
-
-    with {:ok, _result} <- Xandra.execute(conn, batch, consistency: :each_quorum) do
-      :ok
-    else
-      {:error, reason} ->
-        _ =
-          Logger.warn("Failed batch due to database error: #{inspect(reason)}.", tag: "db_error")
-
-        {:error, :database_error}
-    end
-  end
-
-  defp execute_batch(queries) do
+  defp execute_batch(queries, opts) do
     _ =
       Logger.debug(
         "Trying to run #{inspect(length(queries))} queries, not running in batched mode."
@@ -188,7 +178,7 @@ defmodule Astarte.RealmManagement.Queries do
 
     Enum.reduce_while(queries, :ok, fn {statement, params}, _acc ->
       Xandra.Cluster.run(:xandra, fn conn ->
-        with {:ok, _result} <- Xandra.execute(conn, statement, params) do
+        with {:ok, _result} <- Xandra.execute(conn, statement, params, opts) do
           {:cont, :ok}
         else
           {:error, err} ->
@@ -202,6 +192,24 @@ defmodule Astarte.RealmManagement.Queries do
         end
       end)
     end)
+  end
+
+  defp do_execute_batch(conn, queries, opts) do
+    batch =
+      Enum.reduce(queries, Xandra.Batch.new(:logged), fn {statement, params}, batch ->
+        Xandra.Batch.add(batch, statement, params)
+      end)
+
+    case Xandra.execute(conn, batch, opts) do
+      {:ok, %Xandra.Void{}} ->
+        :ok
+
+      {:error, reason} ->
+        _ =
+          Logger.warn("Failed batch due to database error: #{inspect(reason)}.", tag: "db_error")
+
+        {:error, :database_error}
+    end
   end
 
   def check_astarte_health(consistency) do
@@ -219,36 +227,48 @@ defmodule Astarte.RealmManagement.Queries do
     WHERE realm_name='_invalid^name_'
     """
 
-    Xandra.Cluster.run(:xandra, fn conn ->
-      with {:ok, _result} <- Xandra.execute(conn, schema_statement, consistency: consistency),
-           {:ok, _result} <- Xandra.execute(conn, realms_statement, consistency: consistency) do
-        :ok
-      else
-        {:error, err} ->
-          _ = Logger.warn("Health is not good, reason: #{inspect(err)}.", tag: "health_check_bad")
+    with {:ok, _result} <- execute_query(schema_statement, consistency: consistency),
+         {:ok, _result} <- execute_query(realms_statement, consistency: consistency) do
+      :ok
+    else
+      {:error, reason} ->
+        _ =
+          Logger.warn("Health is not good, reason: #{inspect(reason)}.", tag: "health_check_bad")
 
-          {:error, :health_check_bad}
-      end
-    end)
+        {:error, :health_check_bad}
+    end
   end
 
-  def install_new_interface(interface_document, automaton) do
+  # @spec install_new_interface(String.t(), Astarte.Core.Interface.t(), Astarte.Core.Mapping.EndpointsAutomaton.t() ) :: :ok | {:error, reason}
+  def install_new_interface(realm_name, interface_document, automaton) do
+    with true <- verify_realm_ok(realm_name) do
+      do_install_new_interface(realm_name, interface_document, automaton)
+    end
+  end
+
+  defp do_install_new_interface(realm_name, interface_document, automaton) do
+    {storage_type, table_name} = ensure_interface_table(realm_name, interface_document)
+
+    insert_endpoints_query_list =
+      build_insert_endpoints_query_list(realm_name, interface_document)
+
+    insert_interface_query =
+      build_insert_interface_query(
+        realm_name,
+        interface_document,
+        automaton,
+        table_name,
+        storage_type
+      )
+
+    batch = [insert_interface_query | insert_endpoints_query_list]
+
+    execute_batch(batch, consistency: :each_quorum)
+  end
+
+  defp ensure_interface_table(realm_name, interface_document) do
     interface_descriptor = InterfaceDescriptor.from_interface(interface_document)
-
-    %InterfaceDescriptor{
-      interface_id: interface_id,
-      name: interface_name,
-      major_version: major,
-      minor_version: minor,
-      type: interface_type,
-      ownership: interface_ownership,
-      aggregation: aggregation
-    } = interface_descriptor
-
-    %InterfaceDocument{
-      description: description,
-      doc: doc
-    } = interface_document
+    %InterfaceDescriptor{aggregation: aggregation} = interface_descriptor
 
     table_type =
       if aggregation == :individual do
@@ -259,25 +279,77 @@ defmodule Astarte.RealmManagement.Queries do
 
     {storage_type, table_name, create_table_statement} =
       create_interface_table(
+        realm_name,
         aggregation,
         table_type,
         interface_descriptor,
         interface_document.mappings
       )
 
-    {:ok, _} =
-      if create_table_statement != "" do
-        _ = Logger.info("Creating new interface table.", tag: "create_interface_table")
+    {:ok, _result} = do_create_interface_table(create_table_statement)
+    {storage_type, table_name}
+  end
 
-        {:ok, _res} =
-          Xandra.Cluster.run(:xandra, fn conn ->
-            CSystem.run_with_schema_agreement(conn, fn ->
-              Xandra.execute(conn, create_table_statement)
-            end)
-          end)
-      else
-        {:ok, nil}
-      end
+  defp do_create_interface_table(""), do: {:ok, nil}
+
+  defp do_create_interface_table(create_table_statement) do
+    _ = Logger.info("Creating new interface table.", tag: "create_interface_table")
+
+    Xandra.Cluster.run(:xandra, fn conn ->
+      CSystem.run_with_schema_agreement(conn, fn ->
+        Xandra.execute(conn, create_table_statement)
+      end)
+    end)
+  end
+
+  defp build_insert_endpoints_query_list(realm_name, interface_document) do
+    %InterfaceDescriptor{
+      interface_id: interface_id,
+      name: interface_name,
+      major_version: major,
+      minor_version: minor,
+      type: interface_type
+    } = InterfaceDescriptor.from_interface(interface_document)
+
+    Enum.map(
+      interface_document.mappings,
+      &insert_mapping_query(
+        realm_name,
+        interface_id,
+        interface_name,
+        major,
+        minor,
+        interface_type,
+        &1
+      )
+    )
+  end
+
+  defp build_insert_interface_query(
+         realm_name,
+         interface_document,
+         automaton,
+         table_name,
+         storage_type
+       ) do
+    insert_interface_statement =
+      @insert_into_interfaces
+      |> String.replace(":realm_name", realm_name)
+
+    %InterfaceDescriptor{
+      interface_id: interface_id,
+      name: interface_name,
+      major_version: major,
+      minor_version: minor,
+      type: interface_type,
+      ownership: interface_ownership,
+      aggregation: aggregation
+    } = InterfaceDescriptor.from_interface(interface_document)
+
+    %InterfaceDocument{
+      description: description,
+      doc: doc
+    } = interface_document
 
     {transitions, accepting_states_no_ids} = automaton
 
@@ -304,22 +376,20 @@ defmodule Astarte.RealmManagement.Queries do
       doc: doc
     }
 
-    # TODO |> DatabaseQuery.consistency(:each_quorum)
-
-    insert_endpoints =
-      Enum.map(
-        interface_document.mappings,
-        &insert_mapping_query(interface_id, interface_name, major, minor, interface_type, &1)
-      )
-
-    execute_batch([
-      {@insert_into_interfaces, insert_interface_params} | insert_endpoints
-    ])
+    {insert_interface_statement, insert_interface_params}
   end
 
-  defp insert_mapping_query(interface_id, interface_name, major, minor, interface_type, mapping) do
+  defp insert_mapping_query(
+         realm_name,
+         interface_id,
+         interface_name,
+         major,
+         minor,
+         interface_type,
+         mapping
+       ) do
     insert_mapping_statement = """
-    INSERT INTO endpoints
+    INSERT INTO #{realm_name}.endpoints
     (
       interface_id, endpoint_id, interface_name, interface_major_version, interface_minor_version,
       interface_type, endpoint, value_type, reliability, retention, database_retention_policy,
@@ -353,7 +423,6 @@ defmodule Astarte.RealmManagement.Queries do
       doc: mapping.doc
     }
 
-    # TODO |> DatabaseQuery.consistency(:each_quorum)
     {insert_mapping_statement, insert_mapping_params}
   end
 
@@ -367,13 +436,57 @@ defmodule Astarte.RealmManagement.Queries do
     end)
   end
 
-  def update_interface(interface_descriptor, new_mappings, automaton, description, doc) do
+  def update_interface(
+        realm_name,
+        interface_descriptor,
+        new_mappings,
+        automaton,
+        description,
+        doc
+      ) do
+    with true <- verify_realm_ok(realm_name) do
+      do_update_interface(
+        realm_name,
+        interface_descriptor,
+        new_mappings,
+        automaton,
+        description,
+        doc
+      )
+    end
+  end
+
+  defp do_update_interface(
+         realm_name,
+         interface_descriptor,
+         new_mappings,
+         automaton,
+         description,
+         doc
+       ) do
+    update_interface_query =
+      build_update_interface_query(realm_name, interface_descriptor, automaton, description, doc)
+
+    insert_new_mappings_query_list =
+      build_insert_new_mappings_query_list(realm_name, interface_descriptor, new_mappings)
+
+    execute_batch([update_interface_query | insert_new_mappings_query_list],
+      consistency: :each_quorum
+    )
+  end
+
+  defp build_update_interface_query(realm_name, interface_descriptor, automaton, description, doc) do
+    update_interface_statement = """
+    UPDATE #{realm_name}.interfaces
+    SET minor_version=:minor_version, automaton_accepting_states=:automaton_accepting_states,
+      automaton_transitions = :automaton_transitions, description = :description, doc = :doc
+    WHERE name=:name AND major_version=:major_version
+    """
+
     %InterfaceDescriptor{
       name: interface_name,
       major_version: major,
-      minor_version: minor,
-      type: interface_type,
-      interface_id: interface_id
+      minor_version: minor
     } = interface_descriptor
 
     {automaton_transitions, automaton_accepting_states_no_ids} = automaton
@@ -385,13 +498,6 @@ defmodule Astarte.RealmManagement.Queries do
 
     automaton_transitions_bin = :erlang.term_to_binary(automaton_transitions)
 
-    update_interface_statement = """
-    UPDATE interfaces
-    SET minor_version=:minor_version, automaton_accepting_states=:automaton_accepting_states,
-      automaton_transitions = :automaton_transitions, description = :description, doc = :doc
-    WHERE name=:name AND major_version=:major_version
-    """
-
     update_interface_params = %{
       name: interface_name,
       major_version: major,
@@ -402,27 +508,56 @@ defmodule Astarte.RealmManagement.Queries do
       doc: doc
     }
 
-    # TODO |> DatabaseQuery.consistency(:each_quorum)
-
-    insert_mapping_queries =
-      Enum.map(
-        new_mappings,
-        &insert_mapping_query(interface_id, interface_name, major, minor, interface_type, &1)
-      )
-
-    execute_batch([{update_interface_statement, update_interface_params} | insert_mapping_queries])
+    {update_interface_statement, update_interface_params}
   end
 
-  def update_interface_storage(_interface_descriptor, []) do
+  defp build_insert_new_mappings_query_list(realm_name, interface_descriptor, new_mappings) do
+    %InterfaceDescriptor{
+      name: interface_name,
+      major_version: major,
+      minor_version: minor,
+      type: interface_type,
+      interface_id: interface_id
+    } = interface_descriptor
+
+    Enum.map(
+      new_mappings,
+      &insert_mapping_query(
+        realm_name,
+        interface_id,
+        interface_name,
+        major,
+        minor,
+        interface_type,
+        &1
+      )
+    )
+  end
+
+  def update_interface_storage(_realm_name, _interface_descriptor, []) do
     # No new mappings, nothing to do
     :ok
   end
 
   def update_interface_storage(
-        %InterfaceDescriptor{storage_type: :one_object_datastream_dbtable, storage: table_name} =
-          _interface_descriptor,
+        realm_name,
+        %InterfaceDescriptor{storage_type: :one_object_datastream_dbtable} = interface_descriptor,
         new_mappings
       ) do
+    with true <- verify_realm_ok(realm_name) do
+      do_update_interface_storage(realm_name, interface_descriptor, new_mappings)
+    end
+  end
+
+  def update_interface_storage(_realm_name, _interface_descriptor, _new_mappings) do
+    :ok
+  end
+
+  defp do_update_interface_storage(
+         realm_name,
+         %InterfaceDescriptor{storage: table_name},
+         new_mappings
+       ) do
     add_cols = create_one_object_columns_for_mappings(new_mappings)
 
     _ =
@@ -431,28 +566,32 @@ defmodule Astarte.RealmManagement.Queries do
       )
 
     update_storage_statement = """
-    ALTER TABLE #{table_name}
+    ALTER TABLE #{realm_name}.#{table_name}
     ADD (#{add_cols})
     """
 
-    Xandra.Cluster.run(:xandra, fn conn ->
+    case execute_query(update_storage_statement, %{}) do
       # See https://hexdocs.pm/xandra/Xandra.SchemaChange.html for more
-      with {:ok, %Xandra.SchemaChange{effect: "UPDATED", target: "TABLE"} = _result} <-
-             Xandra.execute(conn, update_storage_statement) do
+      {:ok, %Xandra.SchemaChange{effect: "UPDATED", target: "TABLE"}} ->
         :ok
-      else
-        {:error, reason} ->
-          _ = Logger.warn("Database error: #{inspect(reason)}.", tag: "db_error")
-          {:error, :database_error}
-      end
-    end)
+
+      {:error, reason} ->
+        _ =
+          Logger.warn("Cannot update table #{realm_name}.#{table_name}: #{inspect(reason)}.",
+            tag: "db_interface_add_table_cols_fail"
+          )
+
+        {:error, :database_error}
+    end
   end
 
-  def update_interface_storage(_interface_descriptor, _new_mappings) do
-    :ok
+  def delete_interface(realm_name, interface_name, interface_major_version) do
+    with true <- verify_realm_ok(realm_name) do
+      do_delete_interface(realm_name, interface_name, interface_major_version)
+    end
   end
 
-  def delete_interface(interface_name, interface_major_version) do
+  defp do_delete_interface(realm_name, interface_name, interface_major_version) do
     _ =
       Logger.info("Delete interface.",
         interface: interface_name,
@@ -460,54 +599,76 @@ defmodule Astarte.RealmManagement.Queries do
         tag: "db_delete_interface"
       )
 
-    delete_endpoints_statement = "DELETE FROM endpoints WHERE interface_id=:interface_id"
+    delete_endpoints_statement =
+      "DELETE FROM #{realm_name}.endpoints WHERE interface_id=:interface_id"
 
     interface_id = CQLUtils.interface_id(interface_name, interface_major_version)
 
     delete_endpoints_params = %{interface_id: interface_id}
-    # TODO |> DatabaseQuery.consistency(:each_quorum)
 
     delete_interface_statement =
-      "DELETE FROM interfaces WHERE name=:name AND major_version=:major"
+      "DELETE FROM #{realm_name}.interfaces WHERE name=:name AND major_version=:major"
 
     delete_interface_params = %{
       name: interface_name,
       major: interface_major_version
     }
 
-    # TODO |> DatabaseQuery.consistency(:each_quorum)
-
-    execute_batch([
-      {delete_endpoints_statement, delete_endpoints_params},
-      {delete_interface_statement, delete_interface_params}
-    ])
+    execute_batch(
+      [
+        {delete_endpoints_statement, delete_endpoints_params},
+        {delete_interface_statement, delete_interface_params}
+      ],
+      consistency: :each_quorum
+    )
   end
 
   def delete_interface_storage(
-        %InterfaceDescriptor{
-          storage_type: :one_object_datastream_dbtable,
-          storage: table_name
-        } = _interface_descriptor
+        realm_name,
+        %InterfaceDescriptor{} = interface_descriptor
       ) do
-    delete_statement = "DROP TABLE IF EXISTS #{table_name}"
-
-    Xandra.Cluster.run(:xandra, fn conn ->
-      with {:ok, _res} <- Xandra.execute(conn, delete_statement) do
-        _ = Logger.info("Deleted #{table_name} table.", tag: "db_delete_interface_table")
-        :ok
-      else
-        {:error, reason} ->
-          _ = Logger.warn("Database error: #{inspect(reason)}.", tag: "db_error")
-          {:error, :database_error}
-      end
-    end)
+    with true <- verify_realm_ok(realm_name) do
+      do_delete_interface_storage(realm_name, interface_descriptor)
+    end
   end
 
-  def delete_interface_storage(%InterfaceDescriptor{} = interface_descriptor) do
-    with {:ok, result} <- devices_with_data_on_interface(interface_descriptor.name) do
+  defp do_delete_interface_storage(
+         realm_name,
+         %InterfaceDescriptor{
+           storage_type: :one_object_datastream_dbtable,
+           storage: table_name
+         }
+       ) do
+    delete_statement = "DROP TABLE IF EXISTS #{realm_name}.#{table_name}"
+
+    case execute_query(delete_statement, %{}) do
+      {:ok, %Xandra.Void{}} ->
+        _ =
+          Logger.info("Deleted #{table_name} table on #{realm_name}.",
+            tag: "db_delete_interface_table"
+          )
+
+        :ok
+
+      {:error, reason} ->
+        _ =
+          Logger.warn(
+            "Cannot delete interface storage for #{table_name} on #{realm_name}: #{
+              inspect(reason)
+            }.",
+            tag: "delete_interface_storage_fail"
+          )
+
+        {:error, :database_error}
+    end
+  end
+
+  defp do_delete_interface_storage(realm_name, interface_descriptor) do
+    with {:ok, result} <- devices_with_data_on_interface(realm_name, interface_descriptor.name) do
+      # TODO check this (it is now a list and not a CQEx.Result)
       Enum.reduce_while(result, :ok, fn %{key: encoded_device_id}, _acc ->
         with {:ok, device_id} <- Device.decode_device_id(encoded_device_id),
-             :ok <- delete_values(device_id, interface_descriptor) do
+             :ok <- delete_values(realm_name, device_id, interface_descriptor) do
           {:cont, :ok}
         else
           {:error, reason} ->
@@ -525,45 +686,39 @@ defmodule Astarte.RealmManagement.Queries do
       group_name: "devices-by-interface-#{interface_name}-v0"
     }
 
-    Xandra.Cluster.run(:xandra, fn conn ->
-      with {:ok, %Xandra.Page{} = page} <-
-             Xandra.execute(conn, devices_query_statement, devices_query_params,
-               consistency: :quorum
-             ),
-           [%{key: _device_id}] <- Enum.to_list(page) do
-        {:ok, true}
-      else
-        [] ->
-          {:ok, false}
+    case execute_query(devices_query_statement, devices_query_params, consistency: :quorum) do
+      {:ok, %Xandra.Page{} = page} ->
+        case Enum.to_list(page) do
+          [%{key: _device_id}] ->
+            {:ok, true}
 
-        {:error, reason} ->
-          _ = Logger.warn("Database error: #{inspect(reason)}.", tag: "db_error")
-          {:error, :database_error}
-      end
-    end)
+          [] ->
+            {:ok, false}
+        end
+
+      {:error, reason} ->
+        _ = Logger.warn("Database error: #{inspect(reason)}.", tag: "db_error")
+        {:error, :database_error}
+    end
   end
 
-  def devices_with_data_on_interface(interface_name) do
-    devices_query_statement = "SELECT key FROM kv_store WHERE group=:group_name"
+  defp devices_with_data_on_interface(realm_name, interface_name) do
+    devices_query_statement = "SELECT key FROM #{realm_name}.kv_store WHERE group=:group_name"
 
     # TODO: validate interface name?
     devices_query_params = %{
       group_name: "devices-with-data-on-interface-#{interface_name}-v0"
     }
 
-    Xandra.Cluster.run(:xandra, fn conn ->
-      with {:ok, %Xandra.Page{} = page} <-
-             Xandra.execute(conn, devices_query_statement, devices_query_params,
-               consistency: :quorum
-             ) do
-        # TODO: check returned value: is is now a list and not a CQEx.Result
+    case execute_query(devices_query_statement, devices_query_params, consistency: :quorum) do
+      {:ok, %Xandra.Page{} = page} ->
+        # TODO: check returned value: it is now a list and not a CQEx.Result
         Enum.to_list(page)
-      else
-        {:error, reason} ->
-          _ = Logger.warn("Database error: #{inspect(reason)}.", tag: "db_error")
-          {:error, :database_error}
-      end
-    end)
+
+      {:error, reason} ->
+        _ = Logger.warn("Database error: #{inspect(reason)}.", tag: "db_error")
+        {:error, :database_error}
+    end
   end
 
   def delete_devices_with_data_on_interface(interface_name) do
@@ -574,31 +729,28 @@ defmodule Astarte.RealmManagement.Queries do
       group_name: "devices-with-data-on-interface-#{interface_name}-v0"
     }
 
-    Xandra.Cluster.run(:xandra, fn conn ->
-      with {:ok, %Xandra.Void{}} <-
-             Xandra.execute(conn, devices_query_statement, devices_query_params,
-               consistency: :each_quorum
-             ) do
+    case execute_query(devices_query_statement, devices_query_params, consistency: :each_quorum) do
+      {:ok, %Xandra.Void{}} ->
         :ok
-      else
-        {:error, reason} ->
-          _ = Logger.warn("Database error: #{inspect(reason)}.", tag: "db_error")
-          {:error, :database_error}
-      end
-    end)
+
+      {:error, reason} ->
+        _ = Logger.warn("Database error: #{inspect(reason)}.", tag: "db_error")
+        {:error, :database_error}
+    end
   end
 
-  def delete_values(
-        device_id,
-        %InterfaceDescriptor{
-          interface_id: interface_id,
-          storage_type: :multi_interface_individual_properties_dbtable,
-          storage: table_name
-        }
-      ) do
+  defp delete_values(
+         realm_name,
+         device_id,
+         %InterfaceDescriptor{
+           interface_id: interface_id,
+           storage_type: :multi_interface_individual_properties_dbtable,
+           storage: table_name
+         }
+       ) do
     delete_values_statement = """
     DELETE
-    FROM #{table_name}
+    FROM #{realm_name}.#{table_name}
     WHERE device_id=:device_id AND interface_id=:interface_id
     """
 
@@ -607,61 +759,48 @@ defmodule Astarte.RealmManagement.Queries do
       interface_id: interface_id
     }
 
-    Xandra.Cluster.run(:xandra, fn conn ->
-      with {:ok, %Xandra.Void{}} <-
-             Xandra.execute(conn, delete_values_statement, delete_values_params,
-               consistency: :each_quorum
-             ) do
+    case execute_query(delete_values_statement, delete_values_params, consistency: :each_quorum) do
+      {:ok, %Xandra.Void{}} ->
         :ok
-      else
-        {:error, reason} ->
-          _ =
-            Logger.warn("Database error: cannot delete values. Reason: #{inspect(reason)}.",
-              tag: "db_error"
-            )
 
-          {:error, :database_error}
-      end
-    end)
-  end
+      {:error, reason} ->
+        _ =
+          Logger.warn("Database error: cannot delete values. Reason: #{inspect(reason)}.",
+            tag: "db_error"
+          )
 
-  def delete_values(
-        device_id,
-        %InterfaceDescriptor{
-          storage_type: :multi_interface_individual_datastream_dbtable
-        } = interface_descriptor
-      ) do
-    with {:ok, result} <-
-           fetch_all_paths_and_endpoint_ids(device_id, interface_descriptor),
-         :ok <- delete_all_paths_values(device_id, interface_descriptor, result) do
-      delete_all_paths(device_id, interface_descriptor)
+        {:error, :database_error}
     end
   end
 
-  defp delete_all_paths_values(device_id, interface_descriptor, all_paths) do
-    Enum.reduce_while(all_paths, :ok, fn %{endpoint_id: endpoint_id, path: path}, _acc ->
-      with :ok <- delete_path_values(device_id, interface_descriptor, endpoint_id, path) do
-        {:cont, :ok}
-      else
-        {:error, reason} ->
-          {:halt, {:error, reason}}
-      end
-    end)
+  defp delete_values(
+         realm_name,
+         device_id,
+         %InterfaceDescriptor{
+           storage_type: :multi_interface_individual_datastream_dbtable
+         } = interface_descriptor
+       ) do
+    with {:ok, result} <-
+           fetch_all_paths_and_endpoint_ids(realm_name, device_id, interface_descriptor),
+         :ok <- delete_all_paths_values(realm_name, device_id, interface_descriptor, result) do
+      delete_all_paths(realm_name, device_id, interface_descriptor)
+    end
   end
 
-  def delete_path_values(
-        device_id,
-        %InterfaceDescriptor{
-          interface_id: interface_id,
-          storage_type: :multi_interface_individual_datastream_dbtable,
-          storage: table_name
-        },
-        endpoint_id,
-        path
-      ) do
+  defp delete_path_values(
+         realm_name,
+         device_id,
+         %InterfaceDescriptor{
+           interface_id: interface_id,
+           storage_type: :multi_interface_individual_datastream_dbtable,
+           storage: table_name
+         },
+         endpoint_id,
+         path
+       ) do
     delete_path_values_statement = """
     DELETE
-    FROM #{table_name}
+    FROM #{realm_name}.#{table_name}
     WHERE device_id=:device_id AND interface_id=:interface_id
       AND endpoint_id=:endpoint_id AND path=:path
     """
@@ -673,26 +812,79 @@ defmodule Astarte.RealmManagement.Queries do
       path: path
     }
 
-    Xandra.Cluster.run(:xandra, fn conn ->
-      # TODO is :quorum what we want?
-      with {:ok, %Xandra.Void{}} <-
-             Xandra.execute(conn, delete_path_values_statement, delete_path_values_params,
-               consistency: :quorum
-             ) do
+    # TODO is :quorum what we want?
+    case execute_query(delete_path_values_statement, delete_path_values_params,
+           consistency: :quorum
+         ) do
+      {:ok, %Xandra.Void{}} ->
         :ok
+
+      {:error, reason} ->
+        _ =
+          Logger.warn("Database error: cannot delete path values. Reason: #{inspect(reason)}.",
+            tag: "db_error"
+          )
+
+        {:error, :database_error}
+    end
+  end
+
+  defp delete_path_values(
+         realm_name,
+         device_id,
+         %InterfaceDescriptor{
+           interface_id: interface_id,
+           storage_type: :multi_interface_individual_datastream_dbtable,
+           storage: table_name
+         },
+         endpoint_id,
+         path
+       ) do
+    delete_path_values_statement = """
+    DELETE
+    FROM #{realm_name}.#{table_name}
+    WHERE device_id=:device_id AND interface_id=:interface_id
+     AND endpoint_id=:endpoint_id AND path=:path
+    """
+
+    delete_path_values_params = %{
+      device_id: device_id,
+      interface_id: interface_id,
+      endpoint_id: endpoint_id,
+      path: path
+    }
+
+    # TODO is :quorum what we want?
+    case execute_query(delete_path_values_statement, delete_path_values_params,
+           consistency: :quorum
+         ) do
+      {:ok, %Xandra.Void{}} ->
+        :ok
+
+      {:error, reason} ->
+        _ =
+          Logger.warn("Database error: cannot delete path values. Reason: #{inspect(reason)}.",
+            tag: "db_error"
+          )
+
+        {:error, :database_error}
+    end
+  end
+
+  defp delete_all_paths_values(realm_name, device_id, interface_descriptor, all_paths) do
+    Enum.reduce_while(all_paths, :ok, fn %{endpoint_id: endpoint_id, path: path}, _acc ->
+      with :ok <-
+             delete_path_values(realm_name, device_id, interface_descriptor, endpoint_id, path) do
+        {:cont, :ok}
       else
         {:error, reason} ->
-          _ =
-            Logger.warn("Database error: cannot delete path values. Reason: #{inspect(reason)}.",
-              tag: "db_error"
-            )
-
-          {:error, :database_error}
+          {:halt, {:error, reason}}
       end
     end)
   end
 
   defp fetch_all_paths_and_endpoint_ids(
+         realm_name,
          device_id,
          %InterfaceDescriptor{
            interface_id: interface_id,
@@ -701,7 +893,7 @@ defmodule Astarte.RealmManagement.Queries do
        ) do
     all_paths_statement = """
     SELECT endpoint_id, path
-    FROM individual_properties
+    FROM #{realm_name}.individual_properties
     WHERE device_id=:device_id AND interface_id=:interface_id
     """
 
@@ -710,24 +902,23 @@ defmodule Astarte.RealmManagement.Queries do
       interface_id: interface_id
     }
 
-    Xandra.Cluster.run(:xandra, fn conn ->
-      with {:ok, %Xandra.Page{} = page} <-
-             Xandra.execute(conn, all_paths_statement, all_paths_params, consistency: :quorum) do
-        # TODO check return type: now it's a list and not a CQEx.result
+    case execute_query(all_paths_statement, all_paths_params, consistency: :quorum) do
+      # TODO check return type: now it's a list and not a CQEx.result
+      {:ok, %Xandra.Page{} = page} ->
         Enum.to_list(page)
-      else
-        {:error, reason} ->
-          _ =
-            Logger.warn("Database error: cannot delete path values. Reason: #{inspect(reason)}.",
-              tag: "db_error"
-            )
 
-          {:error, :database_error}
-      end
-    end)
+      {:error, reason} ->
+        _ =
+          Logger.warn("Database error: cannot delete path values. Reason: #{inspect(reason)}.",
+            tag: "db_error"
+          )
+
+        {:error, :database_error}
+    end
   end
 
   defp delete_all_paths(
+         realm_name,
          device_id,
          %InterfaceDescriptor{
            interface_id: interface_id,
@@ -736,7 +927,7 @@ defmodule Astarte.RealmManagement.Queries do
        ) do
     delete_paths_statement = """
     DELETE
-    FROM individual_properties
+    FROM #{realm_name}.individual_properties
     WHERE device_id=:device_id AND interface_id=:interface_id
     """
 
@@ -745,28 +936,30 @@ defmodule Astarte.RealmManagement.Queries do
       interface_id: interface_id
     }
 
-    Xandra.Cluster.run(:xandra, fn conn ->
-      with {:ok, %Xandra.Void{}} <-
-             Xandra.execute(conn, delete_paths_statement, delete_paths_params,
-               consistency: :each_quorum
-             ) do
+    case execute_query(delete_paths_statement, delete_paths_params, consistency: :each_quorum) do
+      {:ok, %Xandra.Void{}} ->
         :ok
-      else
-        {:error, reason} ->
-          _ =
-            Logger.warn("Database error: cannot delete path values. Reason: #{inspect(reason)}.",
-              tag: "db_error"
-            )
 
-          {:error, :database_error}
-      end
-    end)
+      {:error, reason} ->
+        _ =
+          Logger.warn("Database error: cannot delete path values. Reason: #{inspect(reason)}.",
+            tag: "db_error"
+          )
+
+        {:error, :database_error}
+    end
   end
 
-  def interface_available_versions(interface_name) do
+  def interface_available_versions(realm_name, interface_name) do
+    with true <- verify_realm_ok(realm_name) do
+      do_interface_available_version(realm_name, interface_name)
+    end
+  end
+
+  defp do_interface_available_version(realm_name, interface_name) do
     interface_versions_statement = """
     SELECT major_version, minor_version
-    FROM interfaces
+    FROM #{realm_name}.interfaces
     WHERE name = :interface_name
     """
 
@@ -774,11 +967,10 @@ defmodule Astarte.RealmManagement.Queries do
       interface_name: interface_name
     }
 
-    Xandra.Cluster.run(:xandra, fn conn ->
-      with {:ok, %Xandra.Page{} = page} <-
-             Xandra.execute(conn, interface_versions_statement, interface_versions_params,
-               consistency: :quorum
-             ) do
+    case execute_query(interface_versions_statement, interface_versions_params,
+           consistency: :quorum
+         ) do
+      {:ok, %Xandra.Page{} = page} ->
         case Enum.to_list(page) do
           [] ->
             {:error, :interface_not_found}
@@ -786,18 +978,35 @@ defmodule Astarte.RealmManagement.Queries do
           result ->
             {:ok, result}
         end
-      else
-        {:error, reason} ->
-          _ = Logger.warn("Database error: #{inspect(reason)}.", tag: "db_error")
-          {:error, :database_error}
-      end
-    end)
+
+      {:error, reason} ->
+        _ = Logger.warn("Database error: #{inspect(reason)}.", tag: "db_error")
+        {:error, :database_error}
+    end
   end
 
-  def is_interface_major_available?(interface_name, interface_major) do
+  def is_interface_major_available?(realm_name, interface_name, interface_major) do
+    case Utils.verify_realm_ok(realm_name) do
+      true ->
+        do_is_interface_major_available?(realm_name, interface_name, interface_major)
+
+      {:error, :invalid_realm_name} ->
+        _ =
+          Logger.warn(
+            "Cannot retrieve major #{interface_major} for interface #{interface_name} on #{
+              realm_name
+            }: invalid realm name",
+            tag: "is_interface_major_available_fail"
+          )
+
+        {:error, :invalid_realm_name}
+    end
+  end
+
+  defp do_is_interface_major_available?(realm_name, interface_name, interface_major) do
     interface_available_major_statement = """
     SELECT COUNT(*)
-    FROM interfaces
+    FROM #{realm_name}.interfaces
     WHERE name = :interface_name AND major_version = :interface_major
     """
 
@@ -806,22 +1015,17 @@ defmodule Astarte.RealmManagement.Queries do
       interface_major: interface_major
     }
 
-    Xandra.Cluster.run(:xandra, fn conn ->
-      with {:ok, %Xandra.Page{} = page} <-
-             Xandra.execute(
-               conn,
-               interface_available_major_statement,
-               interface_available_major_params,
-               consistency: :quorum
-             ),
-           [%{count: count}] <- Enum.to_list(page) do
+    case execute_query(interface_available_major_statement, interface_available_major_params,
+           consistency: :quorum
+         ) do
+      {:ok, %Xandra.Page{} = page} ->
+        [%{count: count}] = Enum.to_list(page)
         {:ok, count != 0}
-      else
-        {:error, reason} ->
-          _ = Logger.warn("Database error: #{inspect(reason)}.", tag: "db_error")
-          {:error, :database_error}
-      end
-    end)
+
+      {:error, reason} ->
+        _ = Logger.warn("Database error: #{inspect(reason)}.", tag: "db_error")
+        {:error, :database_error}
+    end
   end
 
   defp normalize_interface_name(interface_name) do
@@ -829,19 +1033,22 @@ defmodule Astarte.RealmManagement.Queries do
     |> String.downcase()
   end
 
-  def check_interface_name_collision(interface_name) do
+  def check_interface_name_collision(realm_name, interface_name) do
+    with true <- verify_realm_ok(realm_name) do
+      do_check_interface_name_collision(realm_name, interface_name)
+    end
+  end
+
+  defp do_check_interface_name_collision(realm_name, interface_name) do
     normalized_interface = normalize_interface_name(interface_name)
 
     all_names_statement = """
     SELECT DISTINCT name
-    FROM interfaces
+    FROM #{realm_name}.interfaces
     """
 
-    # TODO consider whether it is feasible to move this check in the query rather than after (name normalization issues)
-
-    Xandra.Cluster.run(:xandra, fn conn ->
-      with {:ok, %Xandra.Page{} = page} <-
-             Xandra.execute(conn, all_names_statement, %{}, consistency: :quorum) do
+    case execute_query(all_names_statement, %{}, consistency: :quorum) do
+      {:ok, %Xandra.Page{} = page} ->
         # TODO check type of element here
         Enum.reduce_while(Enum.to_list(page), :ok, fn %{name: name}, _acc ->
           if normalize_interface_name(name) == normalized_interface do
@@ -856,24 +1063,29 @@ defmodule Astarte.RealmManagement.Queries do
             {:cont, :ok}
           end
         end)
-      else
-        {:error, reason} ->
-          Logger.warn("Database error: #{inspect(reason)}.", tag: "db_error")
-          {:error, :database_error}
-      end
-    end)
+
+      {:error, reason} ->
+        Logger.warn("Database error: #{inspect(reason)}.", tag: "db_error")
+        {:error, :database_error}
+    end
   end
 
-  def fetch_interface(interface_name, interface_major) do
+  def fetch_interface(realm_name, interface_name, interface_major) do
+    with true <- verify_realm_ok(realm_name) do
+      do_fetch_interface(realm_name, interface_name, interface_major)
+    end
+  end
+
+  defp do_fetch_interface(realm_name, interface_name, interface_major) do
     with {:ok, interface_row} <-
            Astarte.DataAccess.Interface.retrieve_interface_row(
-             "TODO REALM NAME",
+             realm_name,
              interface_name,
              interface_major
            ),
          {:ok, interface_id} <- Keyword.fetch(interface_row, :interface_id),
          {:ok, mappings} <-
-           Astarte.DataAccess.Mappings.fetch_interface_mappings("TODO REALM NAME", interface_id,
+           Astarte.DataAccess.Mappings.fetch_interface_mappings(realm_name, interface_id,
              include_docs: true
            ) do
       interface = %InterfaceDocument{
@@ -893,84 +1105,110 @@ defmodule Astarte.RealmManagement.Queries do
     end
   end
 
-  def get_interfaces_list() do
+  def get_interfaces_list(realm_name) do
+    with true <- verify_realm_ok(realm_name) do
+      do_get_interfaces_list(realm_name)
+    end
+  end
+
+  defp do_get_interfaces_list(realm_name) do
     all_names_statement = """
     SELECT DISTINCT name
-    FROM interfaces
+    FROM #{realm_name}.interfaces
     """
 
-    Xandra.Cluster.run(:xandra, fn conn ->
-      with {:ok, %Xandra.Page{} = page} <-
-             Xandra.execute(conn, all_names_statement, %{}, consistency: :quorum) do
+    case execute_query(all_names_statement, %{}, consistency: :quorum) do
+      {:ok, %Xandra.Page{} = page} ->
         # TODO check type of element here
         page
         |> Enum.to_list()
         |> Enum.map(fn %{name: name} -> name end)
-      else
-        {:error, reason} ->
-          Logger.warn("Database error: #{inspect(reason)}.", tag: "db_error")
-          {:error, :database_error}
-      end
-    end)
+
+      {:error, reason} ->
+        Logger.warn("Database error: #{inspect(reason)}.", tag: "db_error")
+        {:error, :database_error}
+    end
   end
 
-  def has_interface_simple_triggers?(object_id) do
+  def has_interface_simple_triggers?(realm_name, object_id) do
+    with true <- verify_realm_ok(realm_name) do
+      do_has_interface_simple_triggers?(realm_name, object_id)
+    end
+  end
+
+  defp do_has_interface_simple_triggers?(realm_name, object_id) do
     # FIXME: hardcoded object type here
     simple_triggers_statement = """
     SELECT COUNT(*)
-    FROM simple_triggers
+    FROM #{realm_name}.simple_triggers
     WHERE object_id=:object_id AND object_type=2
     """
 
     simple_triggers_params = %{object_id: object_id}
 
-    Xandra.Cluster.run(:xandra, fn conn ->
-      with {:ok, %Xandra.Page{} = page} <-
-             Xandra.execute(conn, simple_triggers_statement, simple_triggers_params,
-               consistency: :quorum
-             ) do
+    case execute_query(simple_triggers_statement, simple_triggers_params, consistency: :quorum) do
+      {:ok, %Xandra.Page{} = page} ->
         case Enum.to_list(page) do
           [%{count: 0}] -> {:ok, false}
           [%{count: _n}] -> {:ok, true}
         end
-      else
-        {:error, reason} ->
-          _ = Logger.warn("Failed with reason: #{inspect(reason)}.", tag: "db_error")
-          {:error, :database_error}
-      end
-    end)
+
+      {:error, reason} ->
+        _ = Logger.warn("Failed with reason: #{inspect(reason)}.", tag: "db_error")
+        {:error, :database_error}
+    end
   end
 
-  def get_jwt_public_key_pem() do
-    Xandra.Cluster.run(:xandra, fn conn ->
-      with {:ok, %Xandra.Page{} = page} <- Xandra.execute(conn, @query_jwt_public_key_pem),
-           [%{"system.blobasvarchar(value)": pem}] <- Enum.to_list(page) do
+  def get_jwt_public_key_pem(realm_name) do
+    with true <- verify_realm_ok(realm_name) do
+      do_get_jwt_public_key_pem(realm_name)
+    end
+  end
+
+  defp do_get_jwt_public_key_pem(realm_name) do
+    get_pem_statement = @query_jwt_public_key_pem |> String.replace(":realm_name", realm_name)
+
+    case execute_query(get_pem_statement, %{}) do
+      {:ok, %Xandra.Page{} = page} ->
+        [%{"system.blobasvarchar(value)": pem}] = Enum.to_list(page)
         {:ok, pem}
-      else
-        _ ->
-          {:error, :public_key_not_found}
-      end
-    end)
+
+      _ ->
+        {:error, :public_key_not_found}
+    end
   end
 
-  def update_jwt_public_key_pem(jwt_public_key_pem) do
+  def update_jwt_public_key_pem(realm_name, jwt_public_key_pem) do
+    with true <- verify_realm_ok(realm_name) do
+      do_update_jwt_public_key_pem(realm_name, jwt_public_key_pem)
+    end
+  end
+
+  defp do_update_jwt_public_key_pem(realm_name, jwt_public_key_pem) do
+    update_statement =
+      @query_insert_jwt_public_key_pem |> String.replace(":realm_name", realm_name)
+
     update_params = %{pem: jwt_public_key_pem}
 
-    Xandra.Cluster.run(:xandra, fn conn ->
-      with {:ok, %Xandra.Void{}} <-
-             Xandra.execute(conn, @query_insert_jwt_public_key_pem, update_params) do
+    case execute_query(update_statement, update_params) do
+      {:ok, %Xandra.Void{}} ->
         :ok
-      else
-        _ ->
-          {:error, :cant_update_public_key}
-      end
-    end)
+
+      _ ->
+        {:error, :cant_update_public_key}
+    end
   end
 
-  def install_trigger(trigger) do
+  def install_trigger(realm_name, trigger) do
+    with true <- verify_realm_ok(realm_name) do
+      do_install_trigger(realm_name, trigger)
+    end
+  end
+
+  defp do_install_trigger(realm_name, trigger) do
     # TODO: use IF NOT EXISTS
     insert_by_name_query_statement =
-      "INSERT INTO kv_store (group, key, value) VALUES ('triggers-by-name', :trigger_name, uuidAsBlob(:trigger_uuid));"
+      "INSERT INTO #{realm_name}.kv_store (group, key, value) VALUES ('triggers-by-name', :trigger_name, uuidAsBlob(:trigger_uuid));"
 
     insert_by_name_params = %{
       trigger_name: trigger.name,
@@ -979,28 +1217,35 @@ defmodule Astarte.RealmManagement.Queries do
 
     # TODO: use IF NOT EXISTS
     insert_query_statement =
-      "INSERT INTO kv_store (group, key, value) VALUES ('triggers', :trigger_uuid, :trigger_data);"
+      "INSERT INTO #{realm_name}.kv_store (group, key, value) VALUES ('triggers', :trigger_uuid, :trigger_data);"
 
     insert_params = %{
       trigger_uuid: :uuid.uuid_to_string(trigger.trigger_uuid),
       trigger_data: Trigger.encode(trigger)
     }
 
-    Xandra.Cluster.run(:xandra, fn conn ->
-      # TODO: Batch queries
-      with {:ok, %Xandra.Void{}} <-
-             Xandra.execute(conn, insert_by_name_query_statement, insert_by_name_params),
-           {:ok, %Xandra.Void{}} <- Xandra.execute(conn, insert_query_statement, insert_params) do
+    batch_result =
+      execute_batch(
+        [
+          {insert_by_name_query_statement, insert_by_name_params},
+          {insert_query_statement, insert_params}
+        ],
+        # TODO: WTFF
+        consistency: :one
+      )
+
+    case batch_result do
+      {:ok, %Xandra.Void{}} ->
         :ok
-      else
-        {:error, err} ->
-          _ = Logger.warn("Database error: #{inspect(err)}.", tag: "db_error")
-          {:error, :cannot_install_trigger}
-      end
-    end)
+
+      {:error, reason} ->
+        _ = Logger.warn("Database error: #{inspect(reason)}.", tag: "db_error")
+        {:error, :cannot_install_trigger}
+    end
   end
 
   def install_simple_trigger(
+        realm_name,
         object_id,
         object_type,
         parent_trigger_id,
@@ -1008,8 +1253,30 @@ defmodule Astarte.RealmManagement.Queries do
         simple_trigger,
         trigger_target
       ) do
+    with true <- verify_realm_ok(realm_name) do
+      do_install_simple_trigger(
+        realm_name,
+        object_id,
+        object_type,
+        parent_trigger_id,
+        simple_trigger_id,
+        simple_trigger,
+        trigger_target
+      )
+    end
+  end
+
+  defp do_install_simple_trigger(
+         realm_name,
+         object_id,
+         object_type,
+         parent_trigger_id,
+         simple_trigger_id,
+         simple_trigger,
+         trigger_target
+       ) do
     insert_simple_trigger_statement = """
-    INSERT INTO simple_triggers
+    INSERT INTO #{realm_name}.simple_triggers
     (object_id, object_type, parent_trigger_id, simple_trigger_id, trigger_data, trigger_target)
     VALUES (:object_id, :object_type, :parent_trigger_id, :simple_trigger_id, :simple_trigger_data, :trigger_target_data);
     """
@@ -1029,38 +1296,45 @@ defmodule Astarte.RealmManagement.Queries do
     }
 
     insert_simple_trigger_by_uuid_statement =
-      "INSERT INTO kv_store (group, key, value) VALUES ('simple-triggers-by-uuid', :simple_trigger_id, :astarte_ref);"
+      "INSERT INTO #{realm_name}.kv_store (group, key, value) VALUES ('simple-triggers-by-uuid', :simple_trigger_id, :astarte_ref);"
 
     insert_simple_trigger_by_uuid_params = %{
       simple_trigger_id: :uuid.uuid_to_string(simple_trigger_id),
       astarte_ref: AstarteReference.encode(astarte_ref)
     }
 
-    Xandra.Cluster.run(:xandra, fn conn ->
-      with {:ok, %Xandra.Void{}} <-
-             Xandra.execute(conn, insert_simple_trigger_statement, insert_simple_trigger_params),
-           {:ok, %Xandra.Void{}} <-
-             Xandra.execute(
-               conn,
-               insert_simple_trigger_by_uuid_statement,
-               insert_simple_trigger_by_uuid_params
-             ) do
-        :ok
-      else
-        {:error, reason} ->
-          _ = Logger.warn("Database error: #{inspect(reason)}.", tag: "db_error")
-          {:error, :cannot_install_simple_trigger}
-      end
-    end)
+    # TODO: WTFF
+    with {:ok, %Xandra.Void{}} <-
+           execute_query(insert_simple_trigger_statement, insert_simple_trigger_params,
+             consistency: :one
+           ),
+         {:ok, %Xandra.Void{}} <-
+           execute_query(
+             insert_simple_trigger_by_uuid_statement,
+             insert_simple_trigger_by_uuid_params,
+             consistency: :one
+           ) do
+      :ok
+    else
+      {:error, reason} ->
+        _ = Logger.warn("Database error: #{inspect(reason)}.", tag: "db_error")
+        {:error, :cannot_install_simple_trigger}
+    end
   end
 
-  def install_trigger_policy_link(_client, _trigger_uuid, nil) do
+  def install_trigger_policy_link(realm_name, trigger_uuid, trigger_policy) do
+    with true <- verify_realm_ok(realm_name) do
+      do_install_trigger_policy_link(realm_name, trigger_uuid, trigger_policy)
+    end
+  end
+
+  def do_install_trigger_policy_link(_realm_name, _trigger_uuid, nil) do
     :ok
   end
 
-  def install_trigger_policy_link(trigger_uuid, trigger_policy) do
+  def do_install_trigger_policy_link(realm_name, trigger_uuid, trigger_policy) do
     insert_trigger_with_policy_statement =
-      "INSERT INTO kv_store (group, key, value) VALUES (:policy_group, :trigger_uuid, uuidAsBlob(:trigger_uuid))"
+      "INSERT INTO #{realm_name}.kv_store (group, key, value) VALUES (:policy_group, :trigger_uuid, uuidAsBlob(:trigger_uuid))"
 
     insert_trigger_with_policy_params = %{
       policy_group: "triggers-with-policy-#{trigger_policy}",
@@ -1068,45 +1342,50 @@ defmodule Astarte.RealmManagement.Queries do
     }
 
     insert_trigger_to_policy_statement =
-      "INSERT INTO kv_store (group, key, value) VALUES ('trigger_to_policy',  :trigger_uuid, :trigger_policy);"
+      "INSERT INTO #{realm_name}.kv_store (group, key, value) VALUES ('trigger_to_policy',  :trigger_uuid, :trigger_policy);"
 
     insert_trigger_to_policy_params = %{
       trigger_uuid: :uuid.uuid_to_string(trigger_uuid),
       trigger_policy: trigger_policy
     }
 
-    Xandra.Cluster.run(:xandra, fn conn ->
-      with {:ok, %Xandra.Void{}} <-
-             Xandra.execute(
-               conn,
-               insert_trigger_with_policy_statement,
-               insert_trigger_with_policy_params
-             ),
-           {:ok, %Xandra.Void{}} <-
-             Xandra.execute(
-               conn,
-               insert_trigger_to_policy_statement,
-               insert_trigger_to_policy_params
-             ) do
-        :ok
-      else
-        {:error, reason} ->
-          _ = Logger.warn("Database error: #{inspect(reason)}.", tag: "db_error")
-          {:error, :cannot_install_trigger_policy_link}
-      end
-    end)
+    # TODO WTFF
+    with {:ok, %Xandra.Void{}} <-
+           execute_query(
+             insert_trigger_with_policy_statement,
+             insert_trigger_with_policy_params,
+             consistency: :one
+           ),
+         {:ok, %Xandra.Void{}} <-
+           execute_query(
+             insert_trigger_to_policy_statement,
+             insert_trigger_to_policy_params,
+             consistency: :one
+           ) do
+      :ok
+    else
+      {:error, reason} ->
+        _ = Logger.warn("Database error: #{inspect(reason)}.", tag: "db_error")
+        {:error, :cannot_install_trigger_policy_link}
+    end
   end
 
-  def retrieve_trigger_uuid(trigger_name, format \\ :string) do
+  def retrieve_trigger_uuid(realm_name, trigger_name, format \\ :string) do
+    with true <- verify_realm_ok(realm_name) do
+      do_retrieve_trigger_uuid(realm_name, trigger_name, format)
+    end
+  end
+
+  defp do_retrieve_trigger_uuid(realm_name, trigger_name, format) do
     trigger_uuid_statement =
-      "SELECT value FROM kv_store WHERE group='triggers-by-name' AND key=:trigger_name;"
+      "SELECT value FROM #{realm_name}.kv_store WHERE group='triggers-by-name' AND key=:trigger_name;"
 
     trigger_uuid_params = %{trigger_name: trigger_name}
 
-    Xandra.Cluster.run(:xandra, fn conn ->
-      with {:ok, %Xandra.Page{} = page} <-
-             Xandra.execute(conn, trigger_uuid_statement, trigger_uuid_params),
-           [%{value: trigger_uuid}] <- Enum.to_list(page) do
+    case execute_query(trigger_uuid_statement, trigger_uuid_params, consistency: :one) do
+      {:ok, %Xandra.Page{} = page} ->
+        [%{value: trigger_uuid}] = Enum.to_list(page)
+
         case format do
           :string ->
             {:ok, :uuid.uuid_to_string(trigger_uuid)}
@@ -1114,21 +1393,26 @@ defmodule Astarte.RealmManagement.Queries do
           :bytes ->
             {:ok, trigger_uuid}
         end
-      else
-        {:error, reason} ->
-          _ = Logger.warn("Database error: #{inspect(reason)}.", tag: "db_error")
-          {:error, :cannot_retrieve_trigger_uuid}
-      end
-    end)
+
+      {:error, reason} ->
+        _ = Logger.warn("Database error: #{inspect(reason)}.", tag: "db_error")
+        {:error, :cannot_retrieve_trigger_uuid}
+    end
   end
 
-  def delete_trigger_policy_link(_client, _trigger_uuid, nil) do
+  def delete_trigger_policy_link(realm_name, trigger_uuid, trigger_policy) do
+    with true <- verify_realm_ok(realm_name) do
+      do_delete_trigger_policy_link(realm_name, trigger_uuid, trigger_policy)
+    end
+  end
+
+  defp do_delete_trigger_policy_link(_realm_name, _trigger_uuid, nil) do
     :ok
   end
 
-  def delete_trigger_policy_link(trigger_uuid, trigger_policy) do
+  defp do_delete_trigger_policy_link(realm_name, trigger_uuid, trigger_policy) do
     delete_trigger_with_policy_statement =
-      "DELETE FROM kv_store WHERE group=:policy_group AND key=:trigger_uuid;"
+      "DELETE FROM #{realm_name}.kv_store WHERE group=:policy_group AND key=:trigger_uuid;"
 
     delete_trigger_with_policy_params = %{
       policy_group: "triggers-with-policy-#{trigger_policy}",
@@ -1136,34 +1420,39 @@ defmodule Astarte.RealmManagement.Queries do
     }
 
     delete_trigger_to_policy_statement =
-      "DELETE FROM kv_store WHERE group='trigger_to_policy' AND key=:trigger_uuid;"
+      "DELETE FROM #{realm_name}.kv_store WHERE group='trigger_to_policy' AND key=:trigger_uuid;"
 
     delete_trigger_to_policy_params = %{trigger_uuid: :uuid.uuid_to_string(trigger_uuid)}
 
-    Xandra.Cluster.run(:xandra, fn conn ->
-      with {:ok, %Xandra.Void{}} <-
-             Xandra.execute(
-               conn,
-               delete_trigger_with_policy_statement,
-               delete_trigger_with_policy_params
-             ),
-           {:ok, %Xandra.Void{}} <-
-             Xandra.execute(
-               conn,
-               delete_trigger_to_policy_statement,
-               delete_trigger_to_policy_params
-             ) do
-        :ok
-      else
-        {:error, reason} ->
-          _ = Logger.warn("Database error: #{inspect(reason)}.", tag: "db_error")
-          {:error, :cannot_delete_trigger_policy_link}
-      end
-    end)
+    # TODO WTFF
+    with {:ok, %Xandra.Void{}} <-
+           execute_query(
+             delete_trigger_with_policy_statement,
+             delete_trigger_with_policy_params,
+             consistency: :one
+           ),
+         {:ok, %Xandra.Void{}} <-
+           execute_query(
+             delete_trigger_to_policy_statement,
+             delete_trigger_to_policy_params,
+             consistency: :one
+           ) do
+      :ok
+    else
+      {:error, reason} ->
+        _ = Logger.warn("Database error: #{inspect(reason)}.", tag: "db_error")
+        {:error, :cannot_delete_trigger_policy_link}
+    end
   end
 
-  def delete_trigger(client, trigger_name) do
-    with {:ok, trigger_uuid} <- retrieve_trigger_uuid(client, trigger_name) do
+  def delete_trigger(realm_name, trigger_name) do
+    with true <- verify_realm_ok(realm_name) do
+      do_delete_trigger(realm_name, trigger_name)
+    end
+  end
+
+  defp do_delete_trigger(realm_name, trigger_name) do
+    with {:ok, trigger_uuid} <- retrieve_trigger_uuid(realm_name, trigger_name) do
       delete_trigger_by_name_statement =
         "DELETE FROM kv_store WHERE group='triggers-by-name' AND key=:trigger_name;"
 
@@ -1174,51 +1463,60 @@ defmodule Astarte.RealmManagement.Queries do
 
       delete_trigger_params = %{trigger_uuid: trigger_uuid}
 
-      Xandra.Cluster.run(:xandra, fn conn ->
-        with {:ok, %Xandra.Void{}} <-
-               Xandra.execute(conn, delete_trigger_statement, delete_trigger_params),
-             {:ok, %Xandra.Void{}} <-
-               Xandra.execute(
-                 conn,
-                 delete_trigger_by_name_statement,
-                 delete_trigger_by_name_params
-               ) do
-          :ok
-        else
-          {:error, reason} ->
-            _ = Logger.warn("Database error: #{inspect(reason)}.", tag: "db_error")
-            {:error, :cannot_delete_trigger}
-        end
-      end)
-    end
-  end
-
-  def get_triggers_list() do
-    triggers_list_statement = "SELECT key FROM kv_store WHERE group = 'triggers-by-name';"
-
-    Xandra.Cluster.run(:xandra, fn conn ->
-      with {:ok, %Xandra.Page{} = page} <- Xandra.execute(conn, triggers_list_statement) do
-        page
-        |> Enum.to_list()
-        |> Enum.map(fn {:key, value} -> value end)
+      with {:ok, %Xandra.Void{}} <-
+             execute_query(delete_trigger_statement, delete_trigger_params, consistency: :one),
+           {:ok, %Xandra.Void{}} <-
+             execute_query(
+               delete_trigger_by_name_statement,
+               delete_trigger_by_name_params,
+               consistency: :one
+             ) do
+        :ok
       else
         {:error, reason} ->
           _ = Logger.warn("Database error: #{inspect(reason)}.", tag: "db_error")
-          {:error, :cannot_list_triggers}
+          {:error, :cannot_delete_trigger}
       end
-    end)
+    end
   end
 
-  def retrieve_trigger(trigger_name) do
-    with {:ok, trigger_uuid} <- retrieve_trigger_uuid(trigger_name) do
+  def get_triggers_list(realm_name) do
+    with true <- verify_realm_ok(realm_name) do
+      do_get_triggers_list(realm_name)
+    end
+  end
+
+  defp do_get_triggers_list(realm_name) do
+    triggers_list_statement =
+      "SELECT key FROM #{realm_name}.kv_store WHERE group = 'triggers-by-name';"
+
+    case execute_query(triggers_list_statement, consistency: :one) do
+      {:ok, %Xandra.Page{} = page} ->
+        page
+        |> Enum.to_list()
+        |> Enum.map(fn {:key, value} -> value end)
+
+      {:error, reason} ->
+        _ = Logger.warn("Database error: #{inspect(reason)}.", tag: "db_error")
+        {:error, :cannot_list_triggers}
+    end
+  end
+
+  def retrieve_trigger(realm_name, trigger_name) do
+    with true <- verify_realm_ok(realm_name) do
+      do_retrieve_trigger(realm_name, trigger_name)
+    end
+  end
+
+  defp do_retrieve_trigger(realm_name, trigger_name) do
+    with {:ok, trigger_uuid} <- retrieve_trigger_uuid(realm_name, trigger_name) do
       retrieve_trigger_statement =
-        "SELECT value FROM kv_store WHERE group='triggers' AND key=:trigger_uuid;"
+        "SELECT value FROM #{realm_name}.kv_store WHERE group='triggers' AND key=:trigger_uuid;"
 
       retrieve_trigger_params = %{trigger_uuid: trigger_uuid}
 
-      Xandra.Cluster.run(:xandra, fn conn ->
-        with {:ok, %Xandra.Page{} = page} <-
-               Xandra.execute(conn, retrieve_trigger_statement, retrieve_trigger_params) do
+      case execute_query(retrieve_trigger_statement, retrieve_trigger_params, consistency: :one) do
+        {:ok, %Xandra.Page{} = page} ->
           case Enum.to_list(page) do
             [] ->
               {:error, :trigger_not_found}
@@ -1226,23 +1524,28 @@ defmodule Astarte.RealmManagement.Queries do
             [%{value: trigger_data}] ->
               {:ok, Trigger.decode(trigger_data)}
           end
-        else
-          {:error, reason} ->
-            _ = Logger.warn("Database error: #{inspect(reason)}.", tag: "db_error")
-            {:error, :cannot_retrieve_trigger}
-        end
-      end)
+
+        {:error, reason} ->
+          _ = Logger.warn("Database error: #{inspect(reason)}.", tag: "db_error")
+          {:error, :cannot_retrieve_trigger}
+      end
+    end
+  end
+
+  def retrieve_tagged_simple_trigger(realm_name, parent_trigger_uuid, simple_trigger_uuid) do
+    with true <- verify_realm_ok(realm_name) do
+      do_retrieve_tagged_simple_trigger(realm_name, parent_trigger_uuid, simple_trigger_uuid)
     end
   end
 
   # TODO: simple_trigger_uuid is required due how we made the compound key
   # should we move simple_trigger_uuid to the first part of the key?
-  def retrieve_tagged_simple_trigger(parent_trigger_uuid, simple_trigger_uuid) do
+  defp do_retrieve_tagged_simple_trigger(realm_name, parent_trigger_uuid, simple_trigger_uuid) do
     with %{object_uuid: object_id, object_type: object_type} <-
-           retrieve_simple_trigger_astarte_ref(simple_trigger_uuid) do
+           retrieve_simple_trigger_astarte_ref(realm_name, simple_trigger_uuid) do
       retrieve_simple_trigger_statement = """
       SELECT trigger_data
-      FROM simple_triggers
+      FROM #{realm_name}.simple_triggers
       WHERE object_id=:object_id AND object_type=:object_type AND
             parent_trigger_id=:parent_trigger_id AND simple_trigger_id=:simple_trigger_id
       """
@@ -1254,14 +1557,14 @@ defmodule Astarte.RealmManagement.Queries do
         simple_trigger_id: simple_trigger_uuid
       }
 
-      Xandra.Cluster.run(:xandra, fn conn ->
-        with {:ok, %Xandra.Page{} = page} <-
-               Xandra.execute(
-                 conn,
-                 retrieve_simple_trigger_statement,
-                 retrieve_simple_trigger_params
-               ),
-             [%{trigger_data: trigger_data}] <- Enum.to_list(page) do
+      case execute_query(
+             retrieve_simple_trigger_statement,
+             retrieve_simple_trigger_params,
+             consistency: :one
+           ) do
+        {:ok, %Xandra.Page{} = page} ->
+          [%{trigger_data: trigger_data}] = Enum.to_list(page)
+
           {
             :ok,
             %TaggedSimpleTrigger{
@@ -1270,24 +1573,29 @@ defmodule Astarte.RealmManagement.Queries do
               simple_trigger_container: SimpleTriggerContainer.decode(trigger_data)
             }
           }
-        else
-          {:error, reason} ->
-            _ =
-              Logger.warn("Possible inconsistency found: database error: #{inspect(reason)}.",
-                tag: "db_error"
-              )
 
-            {:error, :cannot_retrieve_simple_trigger}
-        end
-      end)
+        {:error, reason} ->
+          _ =
+            Logger.warn("Possible inconsistency found: database error: #{inspect(reason)}.",
+              tag: "db_error"
+            )
+
+          {:error, :cannot_retrieve_simple_trigger}
+      end
     end
   end
 
-  def delete_simple_trigger(parent_trigger_uuid, simple_trigger_uuid) do
+  def delete_simple_trigger(realm_name, parent_trigger_uuid, simple_trigger_uuid) do
+    with true <- verify_realm_ok(realm_name) do
+      do_delete_simple_trigger(realm_name, parent_trigger_uuid, simple_trigger_uuid)
+    end
+  end
+
+  defp do_delete_simple_trigger(realm_name, parent_trigger_uuid, simple_trigger_uuid) do
     with %{object_uuid: object_id, object_type: object_type} <-
-           retrieve_simple_trigger_astarte_ref(simple_trigger_uuid) do
+           retrieve_simple_trigger_astarte_ref(realm_name, simple_trigger_uuid) do
       delete_simple_trigger_statement = """
-      DELETE FROM simple_triggers
+      DELETE FROM #{realm_name}.simple_triggers
       WHERE object_id=:object_id AND object_type=:object_type AND
             parent_trigger_id=:parent_trigger_id AND simple_trigger_id=:simple_trigger_id
       """
@@ -1306,100 +1614,116 @@ defmodule Astarte.RealmManagement.Queries do
         simple_trigger_uuid: :uuid.uuid_to_string(simple_trigger_uuid)
       }
 
-      Xandra.Cluster.run(:xandra, fn conn ->
-        with {:ok, %Xandra.Void{}} <-
-               Xandra.execute(conn, delete_simple_trigger_statement, delete_simple_trigger_params),
-             {:ok, %Xandra.Void{}} <-
-               Xandra.execute(conn, delete_astarte_ref_statement, delete_astarte_ref_params) do
-          :ok
-        else
-          {:error, reason} ->
-            _ = Logger.warn("Database error: #{inspect(reason)}.", tag: "db_error")
-            {:error, :cannot_delete_simple_trigger}
-        end
-      end)
+      # TODO WTFF
+      with {:ok, %Xandra.Void{}} <-
+             execute_query(delete_simple_trigger_statement, delete_simple_trigger_params,
+               consistency: :one
+             ),
+           {:ok, %Xandra.Void{}} <-
+             execute_query(delete_astarte_ref_statement, delete_astarte_ref_params,
+               consistency: :one
+             ) do
+        :ok
+      else
+        {:error, reason} ->
+          _ = Logger.warn("Database error: #{inspect(reason)}.", tag: "db_error")
+          {:error, :cannot_delete_simple_trigger}
+      end
     end
   end
 
-  defp retrieve_simple_trigger_astarte_ref(simple_trigger_uuid) do
+  defp retrieve_simple_trigger_astarte_ref(realm_name, simple_trigger_uuid) do
     retrieve_astarte_ref_statement =
-      "SELECT value FROM kv_store WHERE group='simple-triggers-by-uuid' AND key=:simple_trigger_uuid;"
+      "SELECT value FROM #{realm_name}.kv_store WHERE group='simple-triggers-by-uuid' AND key=:simple_trigger_uuid;"
 
     retrieve_astarte_ref_params = %{
       simple_trigger_uuid: :uuid.uuid_to_string(simple_trigger_uuid)
     }
 
-    Xandra.Cluster.run(:xandra, fn conn ->
-      with {:ok, %Xandra.Page{} = page} <-
-             Xandra.execute(conn, retrieve_astarte_ref_statement, retrieve_astarte_ref_params) do
+    case execute_query(retrieve_astarte_ref_statement, retrieve_astarte_ref_params) do
+      {:ok, %Xandra.Page{} = page} ->
         case Enum.to_list(page) do
           [] -> {:error, :trigger_not_found}
           [%{value: astarte_ref_blob}] -> AstarteReference.decode(astarte_ref_blob)
         end
-      else
-        {:error, reason} ->
-          _ = Logger.warn("Database error: #{inspect(reason)}.", tag: "db_error")
-          {:error, :cannot_retrieve_simple_trigger}
-      end
-    end)
+
+      {:error, reason} ->
+        _ = Logger.warn("Database error: #{inspect(reason)}.", tag: "db_error")
+        {:error, :cannot_retrieve_simple_trigger}
+    end
   end
 
-  def install_new_trigger_policy(policy_name, policy_proto) do
+  def install_new_trigger_policy(realm_name, policy_name, policy_proto) do
+    with true <- verify_realm_ok(realm_name) do
+      do_install_new_trigger_policy(realm_name, policy_name, policy_proto)
+    end
+  end
+
+  defp do_install_new_trigger_policy(realm_name, policy_name, policy_proto) do
     insert_query_statement =
-      "INSERT INTO kv_store (group, key, value) VALUES ('trigger_policy', :policy_name, :policy_container);"
+      "INSERT INTO #{realm_name}.kv_store (group, key, value) VALUES ('trigger_policy', :policy_name, :policy_container);"
 
     insert_query_params = %{
       policy_name: policy_name,
       policy_container: policy_proto
     }
 
-    Xandra.Cluster.run(:xandra, fn conn ->
-      with {:ok, %Xandra.Void{}} <-
-             Xandra.execute(conn, insert_query_statement, insert_query_params) do
+    # TODO WTFF
+    case execute_query(insert_query_statement, insert_query_params, consistency: :one) do
+      {:ok, %Xandra.Void{}} ->
         :ok
-      else
-        {:error, reason} ->
-          _ = Logger.warn("Database error: #{inspect(reason)}.", tag: "db_error")
-          {:error, :cannot_install_trigger_policy}
-      end
-    end)
+
+      {:error, reason} ->
+        _ = Logger.warn("Database error: #{inspect(reason)}.", tag: "db_error")
+        {:error, :cannot_install_trigger_policy}
+    end
   end
 
-  def get_trigger_policies_list() do
+  def get_trigger_policies_list(realm_name) do
+    with true <- verify_realm_ok(realm_name) do
+      do_get_trigger_policies_list(realm_name)
+    end
+  end
+
+  defp do_get_trigger_policies_list(realm_name) do
     trigger_policies_list_statement = """
-    SELECT key FROM kv_store WHERE group=:group_name
+    SELECT key FROM #{realm_name}.kv_store WHERE group=:group_name
     """
 
     trigger_policies_list_params = %{group_name: "trigger_policy"}
 
-    Xandra.Cluster.run(:xandra, fn conn ->
-      with {:ok, %Xandra.Page{} = page} <-
-             Xandra.execute(
-               conn,
-               trigger_policies_list_statement,
-               trigger_policies_list_params,
-               consistency: :quorum
-             ) do
+    case execute_query(
+           trigger_policies_list_statement,
+           trigger_policies_list_params,
+           consistency: :quorum
+         ) do
+      {:ok, %Xandra.Page{} = page} ->
         list =
           page
           |> Enum.to_list()
-          |> Enum.map(fn {:key, value} -> value end)
+          # TODO check type here
+          |> Enum.map(fn %{key: value} -> value end)
 
         {:ok, list}
-      else
-        {:error, reason} ->
-          _ =
-            Logger.warn("Database error: failed with reason: #{inspect(reason)}.", tag: "db_error")
 
-          {:error, :database_error}
-      end
-    end)
+      {:error, reason} ->
+        _ =
+          Logger.warn("Database error: failed with reason: #{inspect(reason)}.", tag: "db_error")
+
+        {:error, :database_error}
+    end
   end
 
-  def fetch_trigger_policy(policy_name) do
+  def fetch_trigger_policy(realm_name, policy_name) do
+    with true <- verify_realm_ok(realm_name) do
+      do_fetch_trigger_policy(realm_name, policy_name)
+    end
+  end
+
+  defp do_fetch_trigger_policy(realm_name, policy_name) do
     policy_cols_statement = """
     SELECT value
-    FROM kv_store
+    FROM #{realm_name}.kv_store
     WHERE group=:group_name and key=:policy_name
     """
 
@@ -1408,31 +1732,34 @@ defmodule Astarte.RealmManagement.Queries do
       policy_name: policy_name
     }
 
-    Xandra.Cluster.run(:xandra, fn conn ->
-      with {:ok, %Xandra.Page{} = page} <-
-             Xandra.execute(conn, policy_cols_statement, policy_cols_params, consistency: :quorum) do
+    case execute_query(policy_cols_statement, policy_cols_params, consistency: :quorum) do
+      {:ok, %Xandra.Page{} = page} ->
         case Enum.to_list(page) do
           [] -> {:error, :policy_not_found}
           [%{value: value}] -> {:ok, value}
         end
-      else
-        {:error, reason} ->
-          _ = Logger.warn("Failed, reason: #{inspect(reason)}.", tag: "db_error")
-          {:error, :database_error}
-      end
-    end)
+
+      {:error, reason} ->
+        _ = Logger.warn("Failed, reason: #{inspect(reason)}.", tag: "db_error")
+        {:error, :database_error}
+    end
   end
 
-  def check_policy_has_triggers(policy_name) do
-    devices_statement = "SELECT key FROM kv_store WHERE group=:group_name LIMIT 1"
+  def check_policy_has_triggers(realm_name, policy_name) do
+    with true <- verify_realm_ok(realm_name) do
+      do_check_policy_has_triggers(realm_name, policy_name)
+    end
+  end
+
+  defp do_check_policy_has_triggers(realm_name, policy_name) do
+    devices_statement = "SELECT #{realm_name}.key FROM kv_store WHERE group=:group_name LIMIT 1"
 
     devices_params = %{
       group_name: "triggers-with-policy-#{policy_name}"
     }
 
-    Xandra.Cluster.run(:xandra, fn conn ->
-      with {:ok, %Xandra.Page{} = page} <-
-             Xandra.execute(conn, devices_statement, devices_params, consistency: :quorum) do
+    case execute_query(devices_statement, devices_params, consistency: :quorum) do
+      {:ok, %Xandra.Page{} = page} ->
         case Enum.to_list(page) do
           [] ->
             {:ok, false}
@@ -1440,20 +1767,25 @@ defmodule Astarte.RealmManagement.Queries do
           [%{key: _device_id}] ->
             {:ok, true}
         end
-      else
-        {:error, reason} ->
-          _ =
-            Logger.error(
-              "Database error while checking #{policy_name}, reason: #{inspect(reason)}.",
-              tag: "db_error"
-            )
 
-          {:error, :database_error}
-      end
-    end)
+      {:error, reason} ->
+        _ =
+          Logger.error(
+            "Database error while checking #{policy_name}, reason: #{inspect(reason)}.",
+            tag: "db_error"
+          )
+
+        {:error, :database_error}
+    end
   end
 
-  def delete_trigger_policy(policy_name) do
+  def delete_trigger_policy(realm_name, policy_name) do
+    with true <- verify_realm_ok(realm_name) do
+      do_delete_trigger_policy(realm_name, policy_name)
+    end
+  end
+
+  defp do_delete_trigger_policy(realm_name, policy_name) do
     _ =
       Logger.info("Delete trigger policy.",
         policy_name: policy_name,
@@ -1461,7 +1793,7 @@ defmodule Astarte.RealmManagement.Queries do
       )
 
     delete_policy_statement =
-      "DELETE FROM kv_store WHERE group= :group_name AND key= :policy_name"
+      "DELETE FROM #{realm_name}.kv_store WHERE group= :group_name AND key= :policy_name"
 
     delete_policy_params = %{
       group_name: "trigger_policy",
@@ -1469,56 +1801,55 @@ defmodule Astarte.RealmManagement.Queries do
     }
 
     # TODO check warning
-    delete_triggers_with_policy_group_statement = "DELETE FROM kv_store WHERE group=:group_name"
+    delete_triggers_with_policy_group_statement =
+      "DELETE FROM #{realm_name}.kv_store WHERE group=:group_name"
 
     delete_triggers_with_policy_group_params = %{
       group_name: "triggers-with-policy-#{policy_name}"
     }
 
-    delete_trigger_to_policy_statement = "DELETE FROM kv_store WHERE group=:group_name;"
+    delete_trigger_to_policy_statement =
+      "DELETE FROM #{realm_name}.kv_store WHERE group=:group_name;"
 
     delete_trigger_to_policy_params = %{
       group_name: "trigger_to_policy"
     }
 
-    # TODO batch together
-    Xandra.Cluster.run(:xandra, fn conn ->
-      with {:ok, %Xandra.Void{}} <-
-             Xandra.execute(conn, delete_policy_statement, delete_policy_params,
-               consistency: :each_quorum
-             ),
-           {:ok, %Xandra.Void{}} <-
-             Xandra.execute(
-               conn,
-               delete_triggers_with_policy_group_statement,
-               delete_triggers_with_policy_group_params,
-               consistency: :each_quorum
-             ),
-           {:ok, %Xandra.Void{}} <-
-             Xandra.execute(
-               conn,
-               delete_trigger_to_policy_statement,
-               delete_trigger_to_policy_params,
-               consistency: :each_quorum
-             ) do
-        :ok
-      else
-        {:error, reason} ->
-          _ =
-            Logger.error(
-              "Database error while deleting #{policy_name}, reason: #{inspect(reason)}.",
-              tag: "db_error"
-            )
+    batch_result =
+      execute_batch(
+        [
+          {delete_policy_statement, delete_policy_params},
+          {delete_triggers_with_policy_group_statement, delete_triggers_with_policy_group_params},
+          {delete_trigger_to_policy_statement, delete_trigger_to_policy_params}
+        ],
+        consistency: :each_quorum
+      )
 
-          {:error, :database_error}
-      end
-    end)
+    case batch_result do
+      {:ok, %Xandra.Void{}} ->
+        :ok
+
+      {:error, reason} ->
+        _ =
+          Logger.error(
+            "Database error while deleting #{policy_name}, reason: #{inspect(reason)}.",
+            tag: "db_error"
+          )
+
+        {:error, :database_error}
+    end
   end
 
-  def check_trigger_policy_already_present(policy_name) do
+  def check_trigger_policy_already_present(realm_name, policy_name) do
+    with true <- verify_realm_ok(realm_name) do
+      do_check_trigger_policy_already_present(realm_name, policy_name)
+    end
+  end
+
+  defp do_check_trigger_policy_already_present(realm_name, policy_name) do
     policy_cols_statement = """
     SELECT COUNT(*)
-    FROM kv_store
+    FROM #{realm_name}.kv_store
     WHERE group= :group_name and key= :policy_name
     """
 
@@ -1527,18 +1858,32 @@ defmodule Astarte.RealmManagement.Queries do
       policy_name: policy_name
     }
 
-    Xandra.Cluster.run(:xandra, fn conn ->
-      with {:ok, %Xandra.Page{} = page} <-
-             Xandra.execute(conn, policy_cols_statement, policy_cols_params, consistency: :quorum) do
+    case execute_query(policy_cols_statement, policy_cols_params, consistency: :quorum) do
+      {:ok, %Xandra.Page{} = page} ->
         case Enum.to_list(page) do
           [%{count: 0}] -> {:ok, false}
           [%{count: _n}] -> {:ok, true}
         end
-      else
-        {:error, reason} ->
-          _ = Logger.warn("Database error: #{inspect(reason)}.", tag: "db_error")
-          {:error, :database_error}
-      end
-    end)
+
+      {:error, reason} ->
+        _ = Logger.warn("Database error: #{inspect(reason)}.", tag: "db_error")
+        {:error, :database_error}
+    end
+  end
+
+  defp execute_query(statement, params, opts \\ []) do
+    Xandra.Cluster.run(:xandra, &Xandra.execute(&1, statement, params, opts))
+  end
+
+  defp verify_realm_ok(realm_name) do
+    with {:error, :invalid_realm_name} <- Utils.verify_realm_ok(realm_name) do
+      _ =
+        Logger.warn(
+          "Invalid realm name #{realm_name}.",
+          tag: "invalid_realm_name"
+        )
+
+      {:error, :invalid_realm_name}
+    end
   end
 end
