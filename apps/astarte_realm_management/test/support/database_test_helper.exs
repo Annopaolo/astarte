@@ -139,6 +139,69 @@ defmodule Astarte.RealmManagement.DatabaseTestHelper do
     VALUES ('auth', 'jwt_public_key_pem', varcharAsBlob(:pem));
   """
 
+  @create_individual_datastreams_table """
+    CREATE TABLE IF NOT EXISTS autotestrealm.individual_datastreams (
+      device_id uuid,
+      interface_id uuid,
+      endpoint_id uuid,
+      path varchar,
+      value_timestamp timestamp,
+      reception_timestamp timestamp,
+      reception_timestamp_submillis smallint,
+
+      double_value double,
+      integer_value int,
+      boolean_value boolean,
+      longinteger_value bigint,
+      string_value varchar,
+      binaryblob_value blob,
+      datetime_value timestamp,
+      doublearray_value list<double>,
+      integerarray_value list<int>,
+      booleanarray_value list<boolean>,
+      longintegerarray_value list<bigint>,
+      stringarray_value list<varchar>,
+      binaryblobarray_value list<blob>,
+      datetimearray_value list<timestamp>,
+
+      PRIMARY KEY((device_id, interface_id, endpoint_id, path), value_timestamp, reception_timestamp, reception_timestamp_submillis)
+    )
+  """
+
+  @create_names_table """
+  CREATE TABLE IF NOT EXISTS autotestrealm.names (
+      object_name varchar,
+      object_uuid uuid,
+      PRIMARY KEY ((object_name))
+    )
+  """
+
+  @create_grouped_devices_table """
+  CREATE TABLE IF NOT EXISTS autotestrealm.grouped_devices (
+      group_name varchar,
+      insertion_uuid timeuuid,
+      device_id uuid,
+      PRIMARY KEY ((group_name), insertion_uuid, device_id)
+    )
+  """
+
+  @create_deleted_devices_table """
+  CREATE TABLE IF NOT EXISTS autotestrealm.deletion_in_progress (
+      device_id uuid,
+      vmq_ack boolean,
+      dup_ack boolean,
+      PRIMARY KEY ((device_id))
+    )
+  """
+
+  @create_devices_table """
+  CREATE TABLE IF NOT EXISTS autotestrealm.devices (
+      device_id uuid,
+      introspection map<ascii, int>,
+      PRIMARY KEY ((device_id))
+    )
+  """
+
   def seed_datastream_test_data(client, device_id, interface_name, major, endpoint_id, path) do
     interface_id = CQLUtils.interface_id(interface_name, major)
 
@@ -265,6 +328,11 @@ defmodule Astarte.RealmManagement.DatabaseTestHelper do
     DatabaseQuery.call!(client, @create_individual_properties_table)
     DatabaseQuery.call!(client, @create_kv_store_table)
     DatabaseQuery.call!(client, @create_simple_triggers_table)
+    DatabaseQuery.call!(client, @create_individual_datastreams_table)
+    DatabaseQuery.call!(client, @create_names_table)
+    DatabaseQuery.call!(client, @create_grouped_devices_table)
+    DatabaseQuery.call!(client, @create_deleted_devices_table)
+    DatabaseQuery.call!(client, @create_devices_table)
 
     :ok
   end
@@ -304,5 +372,265 @@ defmodule Astarte.RealmManagement.DatabaseTestHelper do
 
   def jwt_public_key_pem_fixture do
     @jwt_public_key_pem
+  end
+
+  def seed_individual_datastream_test_data!(
+        realm_name,
+        device_id,
+        interface_name,
+        major,
+        endpoint,
+        path
+      ) do
+    interface_id = CQLUtils.interface_id(interface_name, major)
+    endpoint_id = CQLUtils.endpoint_id(interface_name, major, endpoint)
+
+    Xandra.Cluster.run(:xandra, fn conn ->
+      statement = """
+      INSERT INTO #{realm_name}.individual_datastreams
+        (device_id, interface_id, endpoint_id, path, value_timestamp, reception_timestamp, reception_timestamp_submillis, integer_value)
+      VALUES (:device_id, :interface_id, :endpoint_id, :path, '2017-09-28 04:06+0000', '2017-09-28 05:06+0000', 0, 42);
+      """
+
+      params = %{
+        device_id: device_id,
+        interface_id: interface_id,
+        endpoint_id: endpoint_id,
+        path: path
+      }
+
+      prepared = Xandra.prepare!(conn, statement)
+      Xandra.execute!(conn, prepared, params)
+
+      kv_store_statement = "INSERT INTO #{realm_name}.kv_store (group, key) VALUES (:group, :key)"
+
+      kv_store_params = %{
+        group: "devices-with-data-on-interface-#{interface_name}-v0",
+        key: Device.encode_device_id(device_id)
+      }
+
+      kv_store_prepared = Xandra.prepare!(conn, kv_store_statement)
+      Xandra.execute!(conn, kv_store_prepared, kv_store_params)
+    end)
+
+    :ok
+  end
+
+  def seed_individual_properties_test_data!(
+        realm_name,
+        device_id,
+        interface_name,
+        major,
+        endpoint,
+        path
+      ) do
+    interface_id = CQLUtils.interface_id(interface_name, major)
+    endpoint_id = CQLUtils.endpoint_id(interface_name, major, endpoint)
+
+    Xandra.Cluster.run(:xandra, fn conn ->
+      statement = """
+      INSERT INTO #{realm_name}.individual_properties
+      (device_id, interface_id, endpoint_id, path)
+      VALUES (:device_id, :interface_id, :endpoint_id, :path)
+      """
+
+      params = %{
+        device_id: device_id,
+        interface_id: interface_id,
+        endpoint_id: endpoint_id,
+        path: path
+      }
+
+      prepared = Xandra.prepare!(conn, statement)
+      Xandra.execute!(conn, prepared, params)
+    end)
+
+    :ok
+  end
+
+  def add_interface_to_introspection!(
+        realm_name,
+        device_id,
+        object_datastream_interface,
+        interface_major
+      ) do
+    Xandra.Cluster.run(:xandra, fn conn ->
+      statement = """
+      INSERT INTO #{realm_name}.devices
+      (device_id, introspection)
+      VALUES (:device_id, :introspection)
+      """
+
+      params = %{
+        device_id: device_id,
+        introspection: %{object_datastream_interface => interface_major}
+      }
+
+      prepared = Xandra.prepare!(conn, statement)
+      Xandra.execute!(conn, prepared, params)
+    end)
+
+    :ok
+  end
+
+  def seed_interfaces_table_object_test_data!(realm_name, interface_name, interface_major) do
+    statement = """
+      INSERT INTO #{realm_name}.interfaces
+      (name, major_version, minor_version, interface_id, storage_type, storage, type, ownership, aggregation, automaton_transitions, automaton_accepting_states, description, doc)
+      VALUES (:name, :major_version, :minor_version, :interface_id, :storage_type, :storage, :type, :ownership, :aggregation, :automaton_transitions, :automaton_accepting_states, :description, :doc)
+    """
+
+    params = %{
+      name: interface_name,
+      major_version: interface_major,
+      minor_version: 0,
+      interface_id: CQLUtils.interface_id(interface_name, interface_major),
+      storage_type: 1,
+      storage: "storage",
+      type: 2,
+      ownership: 1,
+      aggregation: 2,
+      automaton_transitions: :erlang.term_to_binary(<<>>),
+      automaton_accepting_states: :erlang.term_to_binary(<<>>),
+      description: "",
+      doc: ""
+    }
+
+    prepared = Xandra.Cluster.prepare!(:xandra, statement)
+    Xandra.Cluster.execute!(:xandra, prepared, params, uuid_format: :binary)
+  end
+
+  def create_object_datastream_table!(table_name) do
+    Xandra.Cluster.execute(:xandra, "TRUNCATE TABLE autotestrealm.#{table_name}")
+
+    Xandra.Cluster.execute!(:xandra, """
+        CREATE TABLE IF NOT EXISTS autotestrealm.#{table_name} (
+          device_id uuid,
+          path varchar,
+          PRIMARY KEY((device_id, path))
+        )
+    """)
+  end
+
+  def seed_object_datastream_test_data!(
+        realm_name,
+        device_id,
+        interface_name,
+        interface_major,
+        path
+      ) do
+    interface_table = CQLUtils.interface_name_to_table_name(interface_name, interface_major)
+
+    Xandra.Cluster.run(:xandra, fn conn ->
+      statement = """
+      INSERT INTO #{realm_name}.#{interface_table} (device_id, path)
+      VALUES (:device_id, :path);
+      """
+
+      params = %{
+        device_id: device_id,
+        path: path
+      }
+
+      prepared = Xandra.prepare!(conn, statement)
+      Xandra.execute!(conn, prepared, params)
+    end)
+
+    :ok
+  end
+
+  def seed_aliases_test_data!(
+        realm_name,
+        device_id,
+        aliaz
+      ) do
+    Xandra.Cluster.run(:xandra, fn conn ->
+      statement = """
+      INSERT INTO #{realm_name}.names
+      (object_name, object_uuid)
+      VALUES (:object_name, :object_uuid)
+      """
+
+      params = %{
+        object_name: aliaz,
+        object_uuid: device_id
+      }
+
+      prepared = Xandra.prepare!(conn, statement)
+      Xandra.execute!(conn, prepared, params)
+    end)
+
+    :ok
+  end
+
+  def seed_groups_test_data!(
+        realm_name,
+        group_name,
+        insertion_uuid,
+        device_id
+      ) do
+    Xandra.Cluster.run(:xandra, fn conn ->
+      statement = """
+      INSERT INTO #{realm_name}.grouped_devices
+      (group_name, insertion_uuid, device_id)
+      VALUES (:group_name, :insertion_uuid, :device_id)
+      """
+
+      params = %{
+        group_name: group_name,
+        device_id: device_id,
+        insertion_uuid: insertion_uuid
+      }
+
+      prepared = Xandra.prepare!(conn, statement)
+      Xandra.execute!(conn, prepared, params, uuid_format: :binary, timeuuid_format: :binary)
+    end)
+
+    :ok
+  end
+
+  def seed_kv_store_test_data!(
+        realm_name,
+        group,
+        key,
+        value
+      ) do
+    Xandra.Cluster.run(:xandra, fn conn ->
+      statement = """
+      INSERT INTO #{realm_name}.kv_store
+      (group, key, value)
+      VALUES (:group, :key, :value)
+      """
+
+      params = %{
+        group: group,
+        key: key,
+        value: value
+      }
+
+      prepared = Xandra.prepare!(conn, statement)
+      Xandra.execute!(conn, prepared, params)
+    end)
+
+    :ok
+  end
+
+  def seed_devices_test_data!(realm_name, device_id) do
+    Xandra.Cluster.run(:xandra, fn conn ->
+      statement = """
+      INSERT INTO #{realm_name}.devices
+      (device_id)
+      VALUES (:device_id)
+      """
+
+      params = %{
+        device_id: device_id
+      }
+
+      prepared = Xandra.prepare!(conn, statement)
+      Xandra.execute!(conn, prepared, params, uuid_format: :binary)
+    end)
+
+    :ok
   end
 end
