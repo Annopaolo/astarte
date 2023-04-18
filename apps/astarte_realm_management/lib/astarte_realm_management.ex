@@ -41,17 +41,23 @@ defmodule Astarte.RealmManagement do
     DataAccessConfig.validate!()
     RPCConfig.validate!()
 
-    xandra_options = Config.xandra_options!()
+    xandra_opts = Config.xandra_options!()
 
-    data_access_opts = [xandra_options: xandra_options]
+    data_access_opts = [xandra_options: xandra_opts]
 
-    rm_xandra_opts = Keyword.put(xandra_options, :name, :xandra)
+    rm_xandra_opts =
+      xandra_opts
+      |> Keyword.put(:name, :xandra)
+      # TODO move to string keys
+      |> Keyword.put(:atom_keys, true)
 
     children = [
       Astarte.RealmManagementWeb.Telemetry,
       {Xandra.Cluster, rm_xandra_opts},
       {Astarte.DataAccess, data_access_opts},
-      {Astarte.RPC.AMQP.Server, [amqp_queue: Protocol.amqp_queue(), handler: Handler]}
+      {Astarte.RPC.AMQP.Server, [amqp_queue: Protocol.amqp_queue(), handler: Handler]},
+      {Task.Supervisor, name: Astarte.RealmManagement.DeviceRemoverSupervisor},
+      Astarte.RealmManagement.DeviceRemoval.Scheduler
     ]
 
     opts = [strategy: :one_for_one, name: Astarte.RealmManagement.Supervisor]

@@ -39,6 +39,7 @@ defmodule Astarte.RealmManagement.Engine do
   alias Astarte.RealmManagement.Engine.MappingUpdates
   alias Astarte.RealmManagement.Queries
   alias Astarte.RealmManagement.Config
+  alias Astarte.RealmManagement.DeviceRemoval.Reconciler
   alias CQEx.Client, as: DatabaseClient
 
   def get_health() do
@@ -997,28 +998,9 @@ defmodule Astarte.RealmManagement.Engine do
 
   def delete_device(realm_name, device_id) do
     # TODO check if allow_extended_id
-      with {:ok, device_id} <- Device.decode_device_id(device_id) do
-        Queries.insert_device_into_deleted(realm_name, device_id)
-      end
+    with {:ok, device_id} <- Device.decode_device_id(device_id),
+         Queries.insert_device_into_deleted(realm_name, device_id) do
+      Reconciler.delete_device(realm_name, device_id)
     end
-    # 1. decode device_id to UUID
-    # 1.1 put (realm_name, device_id) into trashed_devices table
-    # 1.2 return 'ok'
-    # --- from now on, we can use another process ---
-    # 2. select (device_id, interface_id, endpoint_id, path) from individual_datastreams [allow filtering] [shall we create a local secondary index there?]
-    #  2.1. delete ^^
-    # 3. select (device_id, interface_id) from individual_properties [allow filtering]
-    #  3.1. delete ^^
-    # 4. select (device_id, path) from [object interface_id in introspection] [allow filtering]
-    #  4.1. delete ^^
-    # 5. select (object_name) from names [allow filtering]
-    #  5.1. delete alias with object_name ^^
-    # 6. select (group_name, insertion_uuid, device_id) from grouped_devices [allow filtering]
-    #  6.1. delete ^^
-    # 7. select (group, key) from kv_store [allow filtering] [can be skipped if no interface has major > 0]
-    #  7.1. delete ^^
-    # --- points 2 to 7 can be carried on in parallel ---
-    # 8. delete from devices
-    # 9. remove (realm, device_id) from trashed_devices table
-
+  end
 end
