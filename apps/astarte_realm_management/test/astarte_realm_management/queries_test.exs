@@ -19,6 +19,7 @@
 defmodule Astarte.RealmManagement.QueriesTest do
   use ExUnit.Case
   require Logger
+  alias Astarte.Core.CQLUtils
   alias CQEx.Query, as: DatabaseQuery
   alias Astarte.Core.Interface, as: InterfaceDocument
   alias Astarte.Core.InterfaceDescriptor
@@ -256,7 +257,9 @@ defmodule Astarte.RealmManagement.QueriesTest do
     client = connect_to_test_realm("autotestrealm")
 
     json_obj = Jason.decode!(@object_datastream_interface_json)
+
     interface_changeset = InterfaceDocument.changeset(%InterfaceDocument{}, json_obj)
+
     {:ok, intdoc} = Ecto.Changeset.apply_action(interface_changeset, :insert)
 
     %{
@@ -267,10 +270,18 @@ defmodule Astarte.RealmManagement.QueriesTest do
 
     {:ok, automaton} = Astarte.Core.Mapping.EndpointsAutomaton.build(intdoc.mappings)
 
-    assert Queries.is_interface_major_available?(client, interface_name, major_version) ==
+    assert Queries.is_interface_major_available?(
+             client,
+             interface_name,
+             major_version
+           ) ==
              {:ok, false}
 
-    assert Queries.is_interface_major_available?(client, interface_name, major_version - 1) ==
+    assert Queries.is_interface_major_available?(
+             client,
+             interface_name,
+             major_version - 1
+           ) ==
              {:ok, false}
 
     assert Queries.interface_available_versions(client, interface_name) ==
@@ -280,10 +291,18 @@ defmodule Astarte.RealmManagement.QueriesTest do
 
     Queries.install_new_interface(client, intdoc, automaton)
 
-    assert Queries.is_interface_major_available?(client, interface_name, major_version) ==
+    assert Queries.is_interface_major_available?(
+             client,
+             interface_name,
+             major_version
+           ) ==
              {:ok, true}
 
-    assert Queries.is_interface_major_available?(client, interface_name, major_version - 1) ==
+    assert Queries.is_interface_major_available?(
+             client,
+             interface_name,
+             major_version - 1
+           ) ==
              {:ok, false}
 
     assert Queries.interface_available_versions(client, interface_name) ==
@@ -295,7 +314,8 @@ defmodule Astarte.RealmManagement.QueriesTest do
                 ]
               ]}
 
-    assert Queries.get_interfaces_list(client) == {:ok, ["com.ispirata.Hemera.DeviceLog"]}
+    assert Queries.get_interfaces_list(client) ==
+             {:ok, ["com.ispirata.Hemera.DeviceLog"]}
 
     DatabaseQuery.call!(client, @insert_log_line0_device_a)
     DatabaseQuery.call!(client, @insert_log_line1_device_a)
@@ -367,7 +387,9 @@ defmodule Astarte.RealmManagement.QueriesTest do
     client = connect_to_test_realm("autotestrealm")
 
     json_obj = Jason.decode!(@individual_property_device_owned_interface)
+
     interface_changeset = InterfaceDocument.changeset(%InterfaceDocument{}, json_obj)
+
     {:ok, intdoc} = Ecto.Changeset.apply_action(interface_changeset, :insert)
 
     %{
@@ -378,10 +400,18 @@ defmodule Astarte.RealmManagement.QueriesTest do
 
     {:ok, automaton} = Astarte.Core.Mapping.EndpointsAutomaton.build(intdoc.mappings)
 
-    assert Queries.is_interface_major_available?(client, interface_name, major_version) ==
+    assert Queries.is_interface_major_available?(
+             client,
+             interface_name,
+             major_version
+           ) ==
              {:ok, false}
 
-    assert Queries.is_interface_major_available?(client, interface_name, major_version - 1) ==
+    assert Queries.is_interface_major_available?(
+             client,
+             interface_name,
+             major_version - 1
+           ) ==
              {:ok, false}
 
     assert Queries.interface_available_versions(client, interface_name) ==
@@ -391,10 +421,18 @@ defmodule Astarte.RealmManagement.QueriesTest do
 
     Queries.install_new_interface(client, intdoc, automaton)
 
-    assert Queries.is_interface_major_available?(client, interface_name, major_version) ==
+    assert Queries.is_interface_major_available?(
+             client,
+             interface_name,
+             major_version
+           ) ==
              {:ok, true}
 
-    assert Queries.is_interface_major_available?(client, interface_name, major_version - 1) ==
+    assert Queries.is_interface_major_available?(
+             client,
+             interface_name,
+             major_version - 1
+           ) ==
              {:ok, false}
 
     assert Queries.interface_available_versions(client, interface_name) ==
@@ -406,7 +444,8 @@ defmodule Astarte.RealmManagement.QueriesTest do
                 ]
               ]}
 
-    assert Queries.get_interfaces_list(client) == {:ok, ["com.ispirata.Hemera.DeviceLog.Status"]}
+    assert Queries.get_interfaces_list(client) ==
+             {:ok, ["com.ispirata.Hemera.DeviceLog.Status"]}
 
     endpoint =
       find_endpoint(
@@ -418,7 +457,11 @@ defmodule Astarte.RealmManagement.QueriesTest do
 
     endpoint_id = endpoint[:endpoint_id]
 
-    interface_id = Astarte.Core.CQLUtils.interface_id("com.ispirata.Hemera.DeviceLog.Status", 2)
+    interface_id =
+      Astarte.Core.CQLUtils.interface_id(
+        "com.ispirata.Hemera.DeviceLog.Status",
+        2
+      )
 
     assert endpoint[:interface_name] == "com.ispirata.Hemera.DeviceLog.Status"
     assert endpoint[:interface_major_version] == 2
@@ -484,10 +527,13 @@ defmodule Astarte.RealmManagement.QueriesTest do
     client = connect_to_test_realm("autotestrealm")
 
     json_obj = Jason.decode!(@individual_datastream_with_explicit_timestamp_interface_json)
+
     interface_changeset = InterfaceDocument.changeset(%InterfaceDocument{}, json_obj)
+
     {:ok, doc} = Ecto.Changeset.apply_action(interface_changeset, :insert)
 
     {:ok, automaton} = Astarte.Core.Mapping.EndpointsAutomaton.build(doc.mappings)
+
     Queries.install_new_interface(client, doc, automaton)
 
     endpoint_id = retrieve_endpoint_id(client, "com.timestamp.Test", 1, "/test/0/v")
@@ -517,7 +563,10 @@ defmodule Astarte.RealmManagement.QueriesTest do
         :interface_id,
         Astarte.Core.CQLUtils.interface_id("com.timestamp.Test", 1)
       )
-      |> DatabaseQuery.put(:value_timestamp, 1_504_800_339_954 + Enum.random(0..157_700_000_000))
+      |> DatabaseQuery.put(
+        :value_timestamp,
+        1_504_800_339_954 + Enum.random(0..157_700_000_000)
+      )
       |> DatabaseQuery.put(
         :reception_timestamp,
         1_504_800_339_954 + Enum.random(0..157_700_000_000)
@@ -576,5 +625,272 @@ defmodule Astarte.RealmManagement.QueriesTest do
 
     assert Queries.get_jwt_public_key_pem(client) ==
              {:ok, DatabaseTestHelper.jwt_public_key_pem_fixture()}
+  end
+
+  test "retrieve and delete individual datastreams for a device" do
+    device_id = :crypto.strong_rand_bytes(16)
+    interface_name = "com.an.individual.datastream.Interface"
+    interface_major = 0
+    endpoint = "/%{sensorId}/value"
+    path = "/0/value"
+
+    DatabaseTestHelper.seed_individual_datastream_test_data!(
+      "autotestrealm",
+      device_id,
+      interface_name,
+      interface_major,
+      endpoint,
+      path
+    )
+
+    assert [
+             %{
+               device_id: ^device_id,
+               interface_id: interface_id,
+               endpoint_id: endpoint_id,
+               path: ^path
+             }
+           ] =
+             Queries.retrieve_individual_datastreams_keys!(
+               "autotestrealm",
+               device_id
+             )
+
+    assert ^interface_id = CQLUtils.interface_id(interface_name, interface_major)
+
+    assert ^endpoint_id = CQLUtils.endpoint_id(interface_name, interface_major, endpoint)
+
+    assert %Xandra.Void{} =
+             Queries.delete_individual_datastream_values!(
+               "autotestrealm",
+               device_id,
+               interface_id,
+               endpoint_id,
+               path
+             )
+
+    assert [] =
+             Queries.retrieve_individual_datastreams_keys!(
+               "autotestrealm",
+               device_id
+             )
+  end
+
+  test "retrieve and delete individual properties for a device" do
+    device_id = :crypto.strong_rand_bytes(16)
+    interface_name = "com.an.individual.property.Interface"
+    interface_major = 0
+    endpoint = "/%{sensorId}/value"
+    path = "/0/value"
+
+    DatabaseTestHelper.seed_individual_properties_test_data!(
+      "autotestrealm",
+      device_id,
+      interface_name,
+      interface_major,
+      endpoint,
+      path
+    )
+
+    assert [
+             %{
+               device_id: ^device_id,
+               interface_id: interface_id
+             }
+           ] =
+             Queries.retrieve_individual_properties_keys!(
+               "autotestrealm",
+               device_id
+             )
+
+    assert ^interface_id = CQLUtils.interface_id(interface_name, interface_major)
+
+    assert %Xandra.Void{} =
+             Queries.delete_individual_properties_values!(
+               "autotestrealm",
+               device_id,
+               interface_id
+             )
+
+    assert [] =
+             Queries.retrieve_individual_properties_keys!(
+               "autotestrealm",
+               device_id
+             )
+  end
+
+  test "retrieve and delete object datastreams for a device" do
+    interface_name = "com.an.object.datastream.Interface"
+    interface_major = 0
+    table_name = CQLUtils.interface_name_to_table_name(interface_name, interface_major)
+    DatabaseTestHelper.create_object_datastream_table!(table_name)
+
+    device_id = :crypto.strong_rand_bytes(16)
+    path = "/0/value"
+
+    DatabaseTestHelper.seed_object_datastream_test_data!(
+      "autotestrealm",
+      device_id,
+      interface_name,
+      interface_major,
+      path
+    )
+
+    assert [
+             %{
+               device_id: ^device_id,
+               path: path
+             }
+           ] =
+             Queries.retrieve_object_datastream_keys!(
+               "autotestrealm",
+               device_id,
+               table_name
+             )
+
+    assert %Xandra.Void{} =
+             Queries.delete_object_datastream_values!(
+               "autotestrealm",
+               device_id,
+               path,
+               table_name
+             )
+
+    assert [] =
+             Queries.retrieve_object_datastream_keys!(
+               "autotestrealm",
+               device_id,
+               table_name
+             )
+  end
+
+  test "retrieve device introspection" do
+    device_id = :crypto.strong_rand_bytes(16)
+    interface_name = "com.an.object.datastream.Interface"
+    interface_major = 0
+
+    DatabaseTestHelper.add_interface_to_introspection!(
+      "autotestrealm",
+      device_id,
+      interface_name,
+      interface_major
+    )
+
+    assert [%{introspection: introspection}] =
+             Queries.retrieve_device_introspection!(
+               "autotestrealm",
+               device_id
+             )
+
+    assert ^introspection = %{interface_name => interface_major}
+  end
+
+  test "retrieve interface from introspection" do
+    interface_name = "com.an.object.datastream.Interface"
+    interface_major = 0
+
+    DatabaseTestHelper.seed_interfaces_table_object_test_data!(
+      "autotestrealm",
+      interface_name,
+      interface_major
+    )
+
+    assert %Astarte.Core.InterfaceDescriptor{
+             name: ^interface_name,
+             major_version: ^interface_major
+           } =
+             Queries.retrieve_interface_descriptor!(
+               "autotestrealm",
+               interface_name,
+               interface_major
+             )
+  end
+
+  test "retrieve and delete aliases" do
+    device_id = :crypto.strong_rand_bytes(16)
+    # my sanity is slowly degrading
+    aliaz = "ahahahah now I can write 'alias' without Elixir complaining"
+
+    DatabaseTestHelper.seed_aliases_test_data!(
+      "autotestrealm",
+      device_id,
+      aliaz
+    )
+
+    assert [
+             %{
+               object_name: ^aliaz
+             }
+           ] = Queries.retrieve_aliases!("autotestrealm", device_id)
+
+    assert %Xandra.Void{} =
+             Queries.delete_alias_values!(
+               "autotestrealm",
+               aliaz
+             )
+
+    assert [] = Queries.retrieve_aliases!("autotestrealm", device_id)
+  end
+
+  test "retrieve and delete groups" do
+    device_id = :crypto.strong_rand_bytes(16)
+    {insertion_uuid, _state} = :uuid.get_v1(:uuid.new(self()))
+    group = "group"
+
+    DatabaseTestHelper.seed_groups_test_data!(
+      "autotestrealm",
+      group,
+      insertion_uuid,
+      device_id
+    )
+
+    assert [
+             %{
+               device_id: ^device_id,
+               insertion_uuid: ^insertion_uuid,
+               group_name: ^group
+             }
+           ] = Queries.retrieve_groups_keys!("autotestrealm", device_id)
+
+    assert %Xandra.Void{} =
+             Queries.delete_group_values!(
+               "autotestrealm",
+               device_id,
+               group,
+               insertion_uuid
+             )
+
+    assert [] = Queries.retrieve_groups_keys!("autotestrealm", device_id)
+  end
+
+  test "retrieve and delete kv_store entries" do
+    interface_name = "com.an.individual.datastream.Interface"
+    group = "devices-with-data-on-interface-#{interface_name}-v0"
+
+    device_id = :crypto.strong_rand_bytes(16)
+    encoded_device_id = Astarte.Core.Device.encode_device_id(device_id)
+
+    DatabaseTestHelper.seed_kv_store_test_data!(
+      "autotestrealm",
+      group,
+      encoded_device_id,
+      nil
+    )
+
+    assert [
+             %{
+               group: ^group,
+               key: ^encoded_device_id
+             }
+           ] = Queries.retrieve_kv_store_keys!("autotestrealm", encoded_device_id)
+
+    assert %Xandra.Void{} =
+             Queries.delete_kv_store_values!(
+               "autotestrealm",
+               group,
+               encoded_device_id
+             )
+
+    assert [] = Queries.retrieve_kv_store_keys!("autotestrealm", encoded_device_id)
   end
 end
