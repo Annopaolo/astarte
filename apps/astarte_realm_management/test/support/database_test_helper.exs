@@ -39,6 +39,25 @@ defmodule Astarte.RealmManagement.DatabaseTestHelper do
         durable_writes = true;
   """
 
+  @create_astarte_keyspace """
+    CREATE KEYSPACE astarte
+      WITH
+        replication = {'class': 'SimpleStrategy', 'replication_factor': '1'} AND
+        durable_writes = true;
+  """
+
+  @create_astarte_realms_table """
+  CREATE TABLE astarte.realms (
+    realm_name ascii,
+    PRIMARY KEY (realm_name)
+  );
+  """
+
+  @insert_autotestrealm_into_realms """
+  INSERT INTO astarte.realms (realm_name)
+  VALUES ('autotestrealm');
+  """
+
   @create_interfaces_table """
       CREATE TABLE autotestrealm.interfaces (
         name ascii,
@@ -189,7 +208,8 @@ defmodule Astarte.RealmManagement.DatabaseTestHelper do
   CREATE TABLE IF NOT EXISTS autotestrealm.deletion_in_progress (
       device_id uuid,
       vmq_ack boolean,
-      dup_ack boolean,
+      dup_start_ack boolean,
+      dup_end_ack boolean,
       PRIMARY KEY ((device_id))
     )
   """
@@ -323,6 +343,9 @@ defmodule Astarte.RealmManagement.DatabaseTestHelper do
 
   def create_test_keyspace(client) do
     DatabaseQuery.call!(client, @create_autotestrealm)
+    DatabaseQuery.call!(client, @create_astarte_keyspace)
+    DatabaseQuery.call!(client, @create_astarte_realms_table)
+    DatabaseQuery.call!(client, @insert_autotestrealm_into_realms)
     DatabaseQuery.call!(client, @create_interfaces_table)
     DatabaseQuery.call!(client, @create_endpoints_table)
     DatabaseQuery.call!(client, @create_individual_properties_table)
@@ -357,7 +380,8 @@ defmodule Astarte.RealmManagement.DatabaseTestHelper do
   end
 
   def drop_test_keyspace(client) do
-    with {:ok, _result} <- DatabaseQuery.call(client, "DROP KEYSPACE autotestrealm") do
+    with {:ok, _result} <- DatabaseQuery.call(client, "DROP KEYSPACE autotestrealm"),
+         {:ok, _result} <- DatabaseQuery.call(client, "DROP KEYSPACE astarte") do
       :ok
     else
       error ->
@@ -449,11 +473,11 @@ defmodule Astarte.RealmManagement.DatabaseTestHelper do
   end
 
   def add_interface_to_introspection!(
-         realm_name,
-         device_id,
-         object_datastream_interface,
-         interface_major
-       ) do
+        realm_name,
+        device_id,
+        object_datastream_interface,
+        interface_major
+      ) do
     Xandra.Cluster.run(:xandra, fn conn ->
       statement = """
       INSERT INTO #{realm_name}.devices
@@ -493,12 +517,11 @@ defmodule Astarte.RealmManagement.DatabaseTestHelper do
       automaton_transitions: :erlang.term_to_binary(<<>>),
       automaton_accepting_states: :erlang.term_to_binary(<<>>),
       description: "",
-      doc: "",
+      doc: ""
     }
 
     prepared = Xandra.Cluster.prepare!(:xandra, statement)
     Xandra.Cluster.execute!(:xandra, prepared, params, uuid_format: :binary)
-
   end
 
   def create_object_datastream_table!(table_name) do
@@ -633,5 +656,29 @@ defmodule Astarte.RealmManagement.DatabaseTestHelper do
     end)
 
     :ok
+  end
+
+  @spec await_xandra_connected() :: :ok
+  def await_xandra_connected() do
+    await_cluster_connected(:xandra)
+    await_cluster_connected(:xandra_device_deletion)
+  end
+
+  # Taken from https://github.com/lexhide/xandra/blob/main/test/support/test_helper.ex#L5
+  defp await_cluster_connected(cluster, tries \\ 10) do
+    fun = &Xandra.execute!(&1, "SELECT * FROM system.local")
+
+    case Xandra.Cluster.run(cluster, _options = [], fun) do
+      {:error, %Xandra.ConnectionError{} = error} -> raise error
+      _other -> :ok
+    end
+  rescue
+    Xandra.ConnectionError ->
+      if tries > 0 do
+        Process.sleep(100)
+        await_cluster_connected(cluster, tries - 1)
+      else
+        raise("Xandra cluster #{inspect(cluster)} exceeded maximum number of connection attempts")
+      end
   end
 end
