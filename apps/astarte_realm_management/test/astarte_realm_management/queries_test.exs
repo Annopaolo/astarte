@@ -765,7 +765,7 @@ defmodule Astarte.RealmManagement.QueriesTest do
     DatabaseTestHelper.seed_aliases_test_data!(
       "autotestrealm",
       device_id,
-      aliaz
+      device_alias
     )
 
     assert [
