@@ -45,15 +45,10 @@ defmodule Astarte.RealmManagement do
 
     data_access_opts = [xandra_options: xandra_opts]
 
-    rm_xandra_opts =
-      xandra_opts
-      |> Keyword.put(:name, :xandra)
-      # TODO move to string keys
-      |> Keyword.put(:atom_keys, true)
-
     children = [
       Astarte.RealmManagementWeb.Telemetry,
-      {Xandra.Cluster, rm_xandra_opts},
+      xandra_cluster_child_spec(xandra_opts: xandra_opts, name: :xandra),
+      xandra_cluster_child_spec(xandra_opts: xandra_opts, name: :xandra_device_deletion),
       {Astarte.DataAccess, data_access_opts},
       {Astarte.RPC.AMQP.Server, [amqp_queue: Protocol.amqp_queue(), handler: Handler]},
       {Task.Supervisor, name: Astarte.RealmManagement.DeviceRemoverSupervisor},
@@ -62,5 +57,17 @@ defmodule Astarte.RealmManagement do
 
     opts = [strategy: :one_for_one, name: Astarte.RealmManagement.Supervisor]
     Supervisor.start_link(children, opts)
+  end
+
+  def xandra_cluster_child_spec(opts) do
+    name = Keyword.fetch!(opts, :name)
+
+    xandra_opts =
+      Keyword.fetch!(opts, :xandra_opts)
+      |> Keyword.put(:name, name)
+      # TODO move to string keys
+      |> Keyword.put(:atom_keys, true)
+
+    Supervisor.child_spec({Xandra.Cluster, xandra_opts}, id: name)
   end
 end

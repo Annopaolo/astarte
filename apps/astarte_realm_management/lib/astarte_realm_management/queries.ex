@@ -1878,8 +1878,8 @@ defmodule Astarte.RealmManagement.Queries do
   defp do_insert_device_into_deletion_in_progress(conn, realm_name, device_id) do
     statement = """
     INSERT INTO #{realm_name}.deletion_in_progress
-    (device_id, vmq_ack, dup_ack)
-    VALUES (:device_id, false, false)
+    (device_id, vmq_ack, dup_start_ack, dup_end_ack)
+    VALUES (:device_id, false, false, false)
     """
 
     params = %{device_id: device_id}

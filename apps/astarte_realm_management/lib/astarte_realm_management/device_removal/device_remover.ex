@@ -16,7 +16,14 @@
 # limitations under the License.
 #
 
-defmodule Astarte.RealmManagement.DeviceRemoval.Remover do
+defmodule Astarte.RealmManagement.DeviceRemoval.DeviceRemover do
+  @moduledoc """
+  This module handles data deletion for a device using a Task.
+  The Task may fail at any time, notably if the database is not
+  available.
+  See Astarte.RealmManagement.DeviceRemoval.Scheduler for handling failures.
+  """
+
   use Task
   require Logger
   alias Astarte.Core.InterfaceDescriptor
@@ -24,43 +31,32 @@ defmodule Astarte.RealmManagement.DeviceRemoval.Remover do
   alias Astarte.RealmManagement.Queries
   alias Astarte.Core.Device
 
-  def child_spec(opts) do
-    %{
-      id: __MODULE__,
-      start: {__MODULE__, :run, [opts]},
-      type: :worker,
-      restart: :transient,
-      shutdown: 5000
-    }
-  end
-
+  @spec run(%{:device_id => <<_::128>>, :realm_name => binary()}) :: :ok | no_return()
   def run(%{realm_name: realm_name, device_id: device_id}) do
-    {:ok, decoded_device_id} = Device.decode_device_id(device_id)
+    encoded_device_id = Device.encode_device_id(device_id)
+    _ = Logger.info("Starting to remove device #{encoded_device_id}", tag: "device_delete_start")
 
-    datastream_keys = Queries.retrieve_individual_datastreams_keys!(realm_name, decoded_device_id)
+    datastream_keys = Queries.retrieve_individual_datastreams_keys!(realm_name, device_id)
     :ok = delete_individual_datastreams!(realm_name, datastream_keys)
-    property_keys = Queries.retrieve_individual_properties_keys!(realm_name, decoded_device_id)
+    property_keys = Queries.retrieve_individual_properties_keys!(realm_name, device_id)
     :ok = delete_individual_properties!(realm_name, property_keys)
-    introspection = Queries.retrieve_device_introspection!(realm_name, decoded_device_id)
+    introspection = retrieve_device_introspection_map!(realm_name, device_id)
     object_interfaces = filter_object_interfaces!(realm_name, introspection)
     object_tables = Enum.map(object_interfaces, &object_interface_to_table_name/1)
 
     object_keys_with_table_name =
-      retrieve_object_datastream_keys!(
-        realm_name,
-        decoded_device_id,
-        object_tables
-      )
+      retrieve_object_datastream_keys!(realm_name, device_id, object_tables)
 
     :ok = delete_object_datastreams!(realm_name, object_keys_with_table_name)
-    aliases = Queries.retrieve_aliases!(realm_name, decoded_device_id)
+    aliases = retrieve_aliases_for_device!(realm_name, device_id)
     :ok = Enum.each(aliases, &Queries.delete_alias_values!(realm_name, &1))
-    group_keys = Queries.retrieve_groups_keys!(realm_name, decoded_device_id)
+    group_keys = Queries.retrieve_groups_keys!(realm_name, device_id)
     :ok = delete_groups!(realm_name, group_keys)
-    kv_store_keys = Queries.retrieve_kv_store_keys!(realm_name, device_id)
+    kv_store_keys = Queries.retrieve_kv_store_keys!(realm_name, encoded_device_id)
     :ok = delete_kv_store_values!(realm_name, kv_store_keys)
-    %Xandra.Void{} = Queries.delete_device!(realm_name, decoded_device_id)
-    %Xandra.Void{} = Queries.set_device_deleted!(realm_name, decoded_device_id)
+    %Xandra.Void{} = Queries.delete_device!(realm_name, device_id)
+    %Xandra.Void{} = Queries.remove_device_from_deletion_in_progress!(realm_name, device_id)
+    _ = Logger.info("Successfully removed device #{encoded_device_id}", tag: "device_delete_ok")
     :ok
   end
 
@@ -94,11 +90,16 @@ defmodule Astarte.RealmManagement.DeviceRemoval.Remover do
     end)
   end
 
+  defp retrieve_device_introspection_map!(realm_name, device_id) do
+    Queries.retrieve_device_introspection!(realm_name, device_id)
+    |> Enum.flat_map(fn %{introspection: introspection} -> introspection end)
+  end
+
   defp filter_object_interfaces!(realm_name, introspection) do
-    Enum.filter(introspection, fn {interface_name, interface_major} ->
+    introspection
+    |> Enum.filter(fn {interface_name, interface_major} ->
       case Queries.retrieve_interface_descriptor!(realm_name, interface_name, interface_major) do
-        # TODO check
-        %InterfaceDescriptor{type: :object} -> true
+        %InterfaceDescriptor{aggregation: :object} -> true
         _ -> false
       end
     end)
@@ -108,18 +109,19 @@ defmodule Astarte.RealmManagement.DeviceRemoval.Remover do
     CQLUtils.interface_name_to_table_name(interface_name, interface_major)
   end
 
-  defp retrieve_object_datastream_keys!(realm_name, device_id, object_tables) do
-    Enum.map(object_tables, fn table_name ->
-      # TODO check
-      keys =
-        Queries.retrieve_object_datastream_keys!(
-          realm_name,
-          device_id,
-          table_name
-        )
+  defp retrieve_object_datastream_keys!(realm_name, device_id, object_tables)
+       when is_list(object_tables) do
+    # Ah yes, >>=
+    Enum.flat_map(object_tables, &retrieve_object_datastream_keys!(realm_name, device_id, &1))
+  end
 
-      Map.put(keys, :table_name, table_name)
-    end)
+  defp retrieve_object_datastream_keys!(realm_name, device_id, table_name) do
+    Queries.retrieve_object_datastream_keys!(
+      realm_name,
+      device_id,
+      table_name
+    )
+    |> Enum.map(&Map.put(&1, :table_name, table_name))
   end
 
   defp delete_object_datastreams!(realm_name, keys) do
@@ -132,6 +134,11 @@ defmodule Astarte.RealmManagement.DeviceRemoval.Remover do
 
       Queries.delete_object_datastream_values!(realm_name, device_id, path, table_name)
     end)
+  end
+
+  defp retrieve_aliases_for_device!(realm_name, device_id) do
+    Queries.retrieve_aliases!(realm_name, device_id)
+    |> Enum.map(fn %{object_name: aliaz} -> aliaz end)
   end
 
   defp delete_groups!(realm_name, keys) do
@@ -155,9 +162,5 @@ defmodule Astarte.RealmManagement.DeviceRemoval.Remover do
 
       Queries.delete_kv_store_values!(realm_name, group_name, key)
     end)
-  end
-
-  defp via_tuple(realm_name, device_id) do
-    {:via, Registry, {Registry.DeviceRemover, {realm_name, device_id}}}
   end
 end
