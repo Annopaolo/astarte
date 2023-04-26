@@ -87,6 +87,15 @@ defmodule Astarte.DataUpdaterPlant.MessageTracker.Server do
     {:reply, :ok, {:accepting, new_queue, new_ids, acknowledger}}
   end
 
+  def handle_call({:requeue, message_id}, _from, {:accepting, queue, ids, acknowledger}) do
+    {{:value, ^message_id}, new_queue} = :queue.out(queue)
+    {delivery_tag, new_ids} = Map.pop(ids, message_id)
+
+    :ok = requeue(acknowledger, delivery_tag)
+
+    {:reply, :ok, {:accepting, new_queue, new_ids, acknowledger}}
+  end
+
   def handle_call(:deactivate, _from, {state, queue, ids, _acknowledger} = s) do
     cond do
       not :queue.is_empty(queue) ->

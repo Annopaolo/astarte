@@ -25,6 +25,7 @@ defmodule Astarte.DataUpdaterPlant.RPC.VMQPlugin do
 
   alias Astarte.RPC.Protocol.VMQ.Plugin.{
     Call,
+    Delete,
     Disconnect,
     GenericErrorReply,
     GenericOkReply,
@@ -51,6 +52,16 @@ defmodule Astarte.DataUpdaterPlant.RPC.VMQPlugin do
       |> decode_reply()
       |> extract_reply()
     end
+  end
+
+  def delete(client_id) when is_binary(client_id) do
+    %Delete{
+      client_id: client_id
+    }
+    |> encode_call(:delete)
+    |> @rpc_client.rpc_call(@destination)
+    |> decode_reply()
+    |> extract_reply()
   end
 
   def disconnect(client_id, discard_state)

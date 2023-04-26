@@ -43,6 +43,8 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.State do
     :last_device_triggers_refresh,
     :last_groups_refresh,
     :datastream_maximum_storage_retention,
-    :trigger_id_to_policy_name
+    :trigger_id_to_policy_name,
+    :drop_messages,
+    :last_deletion_in_progress_refresh
   ]
 end

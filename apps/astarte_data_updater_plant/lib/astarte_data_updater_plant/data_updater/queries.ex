@@ -940,7 +940,163 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Queries do
 
       {:error, reason} ->
         Logger.warn("Database error while retrieving property: #{inspect(reason)}.")
+
         {:error, :database_error}
     end
+  end
+
+  def ack_end_device_deletion(client, device_id) do
+    statement = """
+    UPDATE deletion_in_progress
+    SET dup_end_ack = true
+    WHERE device_id = :device_id
+    """
+
+    query =
+      DatabaseQuery.new()
+      |> DatabaseQuery.statement(statement)
+      |> DatabaseQuery.put(:device_id, device_id)
+
+    with {:ok, _} <- DatabaseQuery.call(client, query) do
+      :ok
+    else
+      %{acc: _, msg: error_message} ->
+        Logger.warn("Database error when writing end ack device deletion: #{error_message}.")
+
+        {:error, :database_error}
+
+      {:error, reason} ->
+        Logger.warn("Device deletion end ack failed with reason: #{inspect(reason)}.")
+
+        {:error, :database_error}
+    end
+  end
+
+  def ack_start_device_deletion(client, device_id) do
+    statement = """
+    UPDATE deletion_in_progress
+    SET dup_start_ack = true
+    WHERE device_id = :device_id
+    """
+
+    query =
+      DatabaseQuery.new()
+      |> DatabaseQuery.statement(statement)
+      |> DatabaseQuery.put(:device_id, device_id)
+
+    with {:ok, _} <- DatabaseQuery.call(client, query) do
+      :ok
+    else
+      %{acc: _, msg: error_message} ->
+        Logger.warn("Database error when writing start ack device deletion: #{error_message}.")
+
+        {:error, :database_error}
+
+      {:error, reason} ->
+        Logger.warn("Device deletion start ack failed with reason: #{inspect(reason)}.")
+
+        {:error, :database_error}
+    end
+  end
+
+  def check_device_deletion_in_progress(client, device_id) do
+    statement = """
+    SELECT *
+    FROM deletion_in_progress
+    WHERE device_id = :device_id
+    """
+
+    query =
+      DatabaseQuery.new()
+      |> DatabaseQuery.statement(statement)
+      |> DatabaseQuery.put(:device_id, device_id)
+
+    with {:ok, result} <- DatabaseQuery.call(client, query),
+         deletion_row when is_list(deletion_row) <- DatabaseResult.head(result) do
+      {:ok, true}
+    else
+      :empty_dataset ->
+        {:ok, false}
+
+      %{acc: _, msg: error_message} ->
+        _ = Logger.warn("Database error: #{error_message}.", tag: "db_error")
+        {:error, :database_error}
+
+      {:error, reason} ->
+        _ =
+          Logger.warn("Database error, reason: #{inspect(reason)}.",
+            tag: "db_error"
+          )
+
+        {:error, :database_error}
+    end
+  end
+
+  def fetch_device_deletion_not_started(client, device_id) do
+    statement = """
+    SELECT *
+    FROM deletion_in_progress
+    WHERE device_id = :device_id and dup_start_ack = false
+    """
+
+    query =
+      DatabaseQuery.new()
+      |> DatabaseQuery.statement(statement)
+      |> DatabaseQuery.put(:device_id, device_id)
+
+    with {:ok, result} <- DatabaseQuery.call(client, query),
+         deletion_row when is_list(deletion_row) <- DatabaseResult.head(result) do
+      {:ok, true}
+    else
+      :empty_dataset ->
+        {:ok, false}
+
+      %{acc: _, msg: error_message} ->
+        _ = Logger.warn("Database error: #{error_message}.", tag: "db_error")
+        {:error, :database_error}
+
+      {:error, reason} ->
+        _ =
+          Logger.warn("Database error, reason: #{inspect(reason)}.",
+            tag: "db_error"
+          )
+
+        {:error, :database_error}
+    end
+  end
+
+  def retrieve_realms!() do
+    statement = """
+    SELECT *
+    FROM astarte.realms
+    """
+
+    realms =
+      Xandra.Cluster.run(
+        :xandra,
+        &Xandra.execute!(&1, statement, %{}, consistency: :local_quorum)
+      )
+
+    Enum.to_list(realms)
+  end
+
+  def retrieve_devices_waiting_to_start_deletion!(realm_name) do
+    Xandra.Cluster.run(
+      :xandra,
+      &do_retrieve_devices_waiting_to_start_deletion!(&1, realm_name)
+    )
+  end
+
+  defp do_retrieve_devices_waiting_to_start_deletion!(conn, realm_name) do
+    statement = """
+    SELECT *
+    FROM #{realm_name}.deletion_in_progress
+    """
+
+    Xandra.execute!(conn, statement, %{},
+      consistency: :local_quorum,
+      uuid_format: :binary
+    )
+    |> Enum.to_list()
   end
 end

@@ -160,6 +160,15 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater do
     |> GenServer.call({:dump_state})
   end
 
+  def start_device_deletion(realm, encoded_device_id, timestamp) do
+    with :ok <- verify_device_exists(realm, encoded_device_id) do
+      message_tracker = get_message_tracker(realm, encoded_device_id, offload_start: true)
+
+      get_data_updater_process(realm, encoded_device_id, message_tracker, offload_start: true)
+      |> GenServer.call({:start_device_deletion, timestamp})
+    end
+  end
+
   def get_data_updater_process(realm, encoded_device_id, message_tracker, opts \\ []) do
     with {:ok, device_id} <- Device.decode_device_id(encoded_device_id) do
       case Registry.lookup(Registry.DataUpdater, {realm, device_id}) do
