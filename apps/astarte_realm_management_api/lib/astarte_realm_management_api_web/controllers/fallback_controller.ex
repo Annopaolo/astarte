@@ -108,6 +108,20 @@ defmodule Astarte.RealmManagement.APIWeb.FallbackController do
     |> render(:cannot_delete_currently_used_trigger_policy)
   end
 
+  def call(conn, {:error, :invalid_device_id}) do
+    conn
+    |> put_status(:bad_request)
+    |> put_view(Astarte.RealmManagement.APIWeb.ErrorView)
+    |> render(:invalid_device_id)
+  end
+
+  def call(conn, {:error, :device_not_found}) do
+    conn
+    |> put_status(:not_found)
+    |> put_view(Astarte.RealmManagement.APIWeb.ErrorView)
+    |> render(:device_not_found)
+  end
+
   # This is called when no JWT token is present
   def auth_error(conn, {:unauthenticated, _reason}, _opts) do
     conn

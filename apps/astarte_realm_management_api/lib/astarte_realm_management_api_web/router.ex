@@ -38,5 +38,7 @@ defmodule Astarte.RealmManagement.APIWeb.Router do
 
     resources "/:realm_name/triggers", TriggerController, except: [:new, :edit]
     resources "/:realm_name/policies", TriggerPolicyController, except: [:new, :edit]
+
+    delete "/:realm_name/devices/:device_id", DeviceController, :delete
   end
 end
