@@ -21,7 +21,9 @@ defmodule Astarte.RealmManagement.Mock.DB do
   alias Astarte.Core.Triggers.Policy
 
   def start_link do
-    Agent.start_link(fn -> %{interfaces: %{}, trigger_policies: %{}} end, name: __MODULE__)
+    Agent.start_link(fn -> %{interfaces: %{}, trigger_policies: %{}, devices: %{}} end,
+      name: __MODULE__
+    )
   end
 
   def drop_interfaces() do
@@ -162,6 +164,28 @@ defmodule Astarte.RealmManagement.Mock.DB do
       Jason.encode!(trigger_policy)
     else
       nil
+    end
+  end
+
+  def create_device(realm, device_id) do
+    Agent.update(__MODULE__, fn %{devices: devices} = state ->
+      %{state | devices: Map.put(devices, {realm, device_id}, {realm, device_id})}
+    end)
+  end
+
+  def get_device(realm, device_id) do
+    Agent.get(__MODULE__, fn %{devices: devices} ->
+      Map.get(devices, {realm, device_id})
+    end)
+  end
+
+  def delete_device(realm, device_id) do
+    if get_device(realm, device_id) == nil do
+      {:error, :device_not_found}
+    else
+      Agent.update(__MODULE__, fn %{devices: devices} = state ->
+        %{state | devices: Map.delete(devices, {realm, device_id})}
+      end)
     end
   end
 end
