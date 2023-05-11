@@ -26,6 +26,7 @@ defmodule Astarte.DataUpdaterPlant.Mixfile do
       version: "1.2.0-dev",
       build_embedded: Mix.env() == :prod,
       start_permanent: Mix.env() == :prod,
+      elixirc_paths: elixirc_paths(Mix.env()),
       test_coverage: [tool: ExCoveralls],
       preferred_cli_env: [
         coveralls: :test,
@@ -44,6 +45,10 @@ defmodule Astarte.DataUpdaterPlant.Mixfile do
       mod: {Astarte.DataUpdaterPlant.Application, []}
     ]
   end
+
+  # Specifies which paths to compile per environment.
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_), do: ["lib"]
 
   defp dialyzer_cache_directory(:ci) do
     "dialyzer_cache"
