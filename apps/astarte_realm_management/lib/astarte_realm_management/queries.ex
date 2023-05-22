@@ -1200,13 +1200,16 @@ defmodule Astarte.RealmManagement.Queries do
 
   def install_trigger_policy_link(client, trigger_uuid, trigger_policy) do
     insert_trigger_with_policy_statement =
-      "INSERT INTO kv_store (group, key, value) VALUES (:policy_group, :trigger_uuid, uuidAsBlob(:trigger_uuid))"
+      "INSERT INTO kv_store (group, key, value) VALUES (:policy_group, :trigger_uuid, uuidAsBlob(:trigger_uuid_blob))"
+
+    uuid_to_string = :uuid.uuid_to_string(trigger_uuid)
 
     insert_trigger_with_policy_query =
       DatabaseQuery.new()
       |> DatabaseQuery.statement(insert_trigger_with_policy_statement)
       |> DatabaseQuery.put(:policy_group, "triggers-with-policy-#{trigger_policy}")
-      |> DatabaseQuery.put(:trigger_uuid, :uuid.uuid_to_string(trigger_uuid))
+      |> DatabaseQuery.put(:trigger_uuid, uuid_to_string)
+      |> DatabaseQuery.put(:trigger_uuid_blob, uuid_to_string)
 
     insert_trigger_to_policy_statement =
       "INSERT INTO kv_store (group, key, value) VALUES ('trigger_to_policy',  :trigger_uuid, :trigger_policy);"
