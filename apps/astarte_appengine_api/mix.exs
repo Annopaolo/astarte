@@ -107,7 +107,9 @@ defmodule Astarte.AppEngine.API.Mixfile do
       {:skogsra, "~> 2.2"},
       {:castore, "~> 0.1.0"},
       {:observer_cli, "~> 1.5"},
-      {:dialyxir, "~> 1.0", only: [:dev, :ci], runtime: false}
+      {:dialyxir, "~> 1.0", only: [:dev, :ci], runtime: false},
+      # Force re2 to an M1-compatible version
+      {:re2, "~> 1.9.8", override: true}
     ]
   end
 end
