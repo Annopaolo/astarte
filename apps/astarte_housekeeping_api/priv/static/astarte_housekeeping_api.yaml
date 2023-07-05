@@ -111,8 +111,8 @@ paths:
     put:
       tags:
         - realm
-      summary: Update a realm
-      description: Updates a realm's configuration.
+      summary: "DEPRECATED: Update a realm"
+      description: Updates a realm's configuration. This API has been deprecated in favor of PATCH.
       operationId: updateRealm
       security:
         - JWT: []
@@ -166,6 +166,50 @@ paths:
           description: Realm deletion disabled
         '422':
           description: Connected devices present
+    patch:
+      tags:
+        - realm
+      summary: Update a realm
+      description: >-
+        Updates a realm's configuration.
+      security:
+        - JWT: []
+      parameters:
+        - name: realm_name
+          in: path
+          description: Realm name
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Realm'
+        '400':
+          description: Bad request
+        '401':
+          description: Authorization information is missing or invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericError'
+              example:
+                errors:
+                  detail: Unauthorized
+        '404':
+          description: Realm not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericError'
+              example:
+                errors:
+                  detail: Not found
+      requestBody:
+        $ref: '#/components/requestBodies/updateRealmBody'
 components:
   securitySchemes:
     JWT:
@@ -190,6 +234,17 @@ components:
                 $ref: '#/components/schemas/Realm'
       description: Realm JSON configuration object.
       required: true
+    updateRealmBody:
+      content:
+        application/merge-patch+json:
+          schema:
+            type: object
+            properties:
+              data:
+                $ref: '#/components/schemas/RealmPatch'
+      description: >-
+        A JSON Merge Patch containing the property changes that should be applied to the realm.
+      required: true
   schemas:
     Realm:
       type: object
@@ -212,6 +267,48 @@ components:
             f9jgaxW4oQV85enS/OJrrC9jU11agRc4bDv1h4s2t+ETWb4llTVk3HMIHbC3EvKJ
             VwIDAQAB
             -----END PUBLIC KEY-----
+          description: "PEM-encoded public key of the realm."
         replication_factor:
           type: integer
           example: 2
+          description: "Replication factor of the keyspace that holds the realm's data."
+        device_registration_limit:
+          type: integer
+          minimum: 1
+          example: 100
+          description: "Optional upper bound to the number of devices that can be registered in the realm."
+    RealmPatch:
+      type: object
+      properties:
+        jwt_public_key_pem:
+          type: string
+          example: |
+            -----BEGIN PUBLIC KEY-----
+            MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsj7/Ci5Nx+ApLNW7+DyE
+            eTzQ68KEJT/gPW73Kpa2uyvxDwY669z/rP4hMj16wv4Ku3bI6C1ZIqT5SVuF8pDo
+            1Y1SF0GRIeslupm9KV1aFqIu1/srLz18LQHucQYUSa99PStFUJY2V83wneaeAArY
+            4VKDuQYtRZOd2VeD5Cbn602ksLLWCQc9HfL3VUHXTw6DuthnMMJARcVem8RAMScm
+            htGi6YRPFzvHtkb1WQCNGjw5gAmHX5/37ouwbBdnXOa9deiFv+1UIdcCVwMTyP/4
+            f9jgaxW4oQV85enS/OJrrC9jU11agRc4bDv1h4s2t+ETWb4llTVk3HMIHbC3EvKJ
+            VwIDAQAB
+            -----END PUBLIC KEY-----
+          description: "PEM-encoded public key of the realm."
+        replication_factor:
+          type: integer
+          example: 2
+          description: "Replication factor of the keyspace that holds the realm's data."
+        device_registration_limit:
+          type: integer
+          minimum: 1
+          example: 100
+          description: "Upper bound to the number of devices that can be registered in the realm."
+    GenericError:
+      type: object
+      required:
+        - errors
+      properties:
+        errors:
+          type: object
+          properties:
+            detail:
+              type: string
