@@ -27,9 +27,9 @@ defmodule Astarte.RealmManagement.DeviceRemoval.DeviceRemoverTest do
 
   @realm_name "autotestrealm"
   @device_id <<39, 243, 128, 160, 158, 152, 245, 223, 26, 43, 66, 116, 153, 237, 184, 43>>
-  @individual_datastream_interface "com.individual.datastream.Interface"
-  @object_datastream_interface "com.object.datastream.Interface"
-  @individual_property_interface "com.individual.datastream.Interface"
+  @individual_datastream_interface "com.an.individual.datastream.Interface"
+  @object_datastream_interface "com.an.object.datastream.Interface"
+  @property_interface "com.a.property.Interface"
   @interface_major 0
   @endpoint "/a/%{endpoint}"
   @path "/a/path"
@@ -45,7 +45,7 @@ defmodule Astarte.RealmManagement.DeviceRemoval.DeviceRemoverTest do
     end)
   end
 
-  test "device data are succesfully removed" do
+  test "device data are successfully removed" do
     deletion_prepared =
       Xandra.Cluster.prepare!(
         :xandra,
@@ -59,9 +59,9 @@ defmodule Astarte.RealmManagement.DeviceRemoval.DeviceRemoverTest do
 
     Xandra.Cluster.execute!(:xandra, deletion_prepared, params)
 
-    DeviceRemover.run(%{realm_name: @realm_name, device_id: @device_id})
+    :ok = DeviceRemover.run(%{realm_name: @realm_name, device_id: @device_id})
 
-    table_name =
+    object_aggregated_interface_table_name =
       CQLUtils.interface_name_to_table_name(
         @object_datastream_interface,
         @interface_major
@@ -69,12 +69,19 @@ defmodule Astarte.RealmManagement.DeviceRemoval.DeviceRemoverTest do
 
     assert [] = Queries.retrieve_individual_datastreams_keys!(@realm_name, @device_id)
     assert [] = Queries.retrieve_individual_properties_keys!(@realm_name, @device_id)
-    assert [] = Queries.retrieve_object_datastream_keys!(@realm_name, @device_id, table_name)
+
+    assert [] =
+             Queries.retrieve_object_datastream_keys!(
+               @realm_name,
+               @device_id,
+               object_aggregated_interface_table_name
+             )
+
     assert [] = Queries.retrieve_aliases!(@realm_name, @device_id)
     assert [] = Queries.retrieve_groups_keys!(@realm_name, @device_id)
 
     assert [] =
-             Queries.retrieve_kv_store_keys!(
+             Queries.retrieve_kv_store_entries!(
                @realm_name,
                @device_id |> Astarte.Core.Device.encode_device_id()
              )
@@ -94,28 +101,28 @@ defmodule Astarte.RealmManagement.DeviceRemoval.DeviceRemoverTest do
 
   defp seed_device_data!() do
     DatabaseTestHelper.seed_individual_datastream_test_data!(
-      @realm_name,
-      @device_id,
-      @individual_datastream_interface,
-      @interface_major,
-      @endpoint,
-      @path
+      realm_name: @realm_name,
+      device_id: @device_id,
+      interface_name: @individual_datastream_interface,
+      interface_major: @interface_major,
+      endpoint: @endpoint,
+      path: @path
     )
 
     DatabaseTestHelper.seed_individual_properties_test_data!(
-      @realm_name,
-      @device_id,
-      @individual_property_interface,
-      @interface_major,
-      @endpoint,
-      @path
+      realm_name: @realm_name,
+      device_id: @device_id,
+      interface_name: @property_interface,
+      interface_major: @interface_major,
+      endpoint: @endpoint,
+      path: @path
     )
 
     DatabaseTestHelper.add_interface_to_introspection!(
-      @realm_name,
-      @device_id,
-      @object_datastream_interface,
-      @interface_major
+      realm_name: @realm_name,
+      device_id: @device_id,
+      interface_name: @object_datastream_interface,
+      interface_major: @interface_major
     )
 
     DatabaseTestHelper.create_object_datastream_table!(
@@ -123,48 +130,42 @@ defmodule Astarte.RealmManagement.DeviceRemoval.DeviceRemoverTest do
     )
 
     DatabaseTestHelper.seed_interfaces_table_object_test_data!(
-      @realm_name,
-      @object_datastream_interface,
-      @interface_major
+      realm_name: @realm_name,
+      interface_name: @object_datastream_interface,
+      interface_major: @interface_major
     )
 
     DatabaseTestHelper.seed_object_datastream_test_data!(
-      @realm_name,
-      @device_id,
-      @object_datastream_interface,
-      @interface_major,
-      @path
+      realm_name: @realm_name,
+      device_id: @device_id,
+      interface_name: @object_datastream_interface,
+      interface_major: @interface_major,
+      path: @path
     )
 
     DatabaseTestHelper.seed_aliases_test_data!(
-      @realm_name,
-      @device_id,
-      "alias"
+      realm_name: @realm_name,
+      device_id: @device_id
     )
-
-    {insertion_uuid, _state} = :uuid.get_v1(:uuid.new(self()))
 
     DatabaseTestHelper.seed_groups_test_data!(
-      @realm_name,
-      "group_name",
-      insertion_uuid,
-      @device_id
+      realm_name: @realm_name,
+      device_id: @device_id
     )
 
     DatabaseTestHelper.seed_kv_store_test_data!(
-      @realm_name,
-      "devices-by-interface-#{@individual_datastream_interface}-v#{@interface_major}",
-      @device_id |> Astarte.Core.Device.encode_device_id(),
-      nil
+      realm_name: @realm_name,
+      group: "devices-by-interface-#{@individual_datastream_interface}-v#{@interface_major}",
+      device_id: @device_id |> Astarte.Core.Device.encode_device_id()
     )
 
     DatabaseTestHelper.seed_kv_store_test_data!(
-      @realm_name,
-      "devices-with-data-on-interface-#{@individual_datastream_interface}-v#{@interface_major}",
-      @device_id |> Astarte.Core.Device.encode_device_id(),
-      nil
+      realm_name: @realm_name,
+      group:
+        "devices-with-data-on-interface-#{@individual_datastream_interface}-v#{@interface_major}",
+      device_id: @device_id |> Astarte.Core.Device.encode_device_id()
     )
 
-    DatabaseTestHelper.seed_devices_test_data!(@realm_name, @device_id)
+    DatabaseTestHelper.seed_devices_test_data!(realm_name: @realm_name, device_id: @device_id)
   end
 end

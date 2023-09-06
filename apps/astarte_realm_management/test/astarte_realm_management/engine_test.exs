@@ -1458,7 +1458,7 @@ defmodule Astarte.RealmManagement.EngineTest do
   test "begin deletion of an existing device" do
     device_id = Device.random_device_id()
     encoded_device_id = Device.encode_device_id(device_id)
-    DatabaseTestHelper.seed_devices_test_data!("autotestrealm", device_id)
+    DatabaseTestHelper.seed_devices_test_data!(realm_name: "autotestrealm", device_id: device_id)
 
     assert :ok = Engine.delete_device(@test_realm_name, encoded_device_id)
 
