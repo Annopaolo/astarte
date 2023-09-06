@@ -601,7 +601,6 @@ defmodule Astarte.RealmManagement.DatabaseTestHelper do
     :ok
   end
 
-  @spec await_xandra_connected() :: :ok
   def await_xandra_connected() do
     await_cluster_connected(:xandra)
     await_cluster_connected(:xandra_device_deletion)
@@ -624,4 +623,31 @@ defmodule Astarte.RealmManagement.DatabaseTestHelper do
         raise("Xandra cluster #{inspect(cluster)} exceeded maximum number of connection attempts")
       end
   end
+
+  defp individual_datastream_test_fixtures do
+    [
+      realm_name: "autotestrealm",
+      device_id: Astarte.Core.Device.random_device_id(),
+      interface_name: "com.individual.datastream.Interface#{System.unique_integer([:positive])}",
+      major: System.unique_integer([:positive]),
+      endpoint: "/%{sensorId}/value",
+      path: "/the_#{System.unique_integer([:positive])}_th/value",
+      value_timestamp: DateTime.utc_now(),
+      reception_timestamp: DateTime.utc_now(),
+      reception_timestamp_submillis: System.unique_integer([:positive]),
+      value: System.unique_integer([:positive])
+    ]
+  end
+
+  defp compute_fixtures(opts, fixtures) do
+    fixtures = Keyword.merge(fixtures, opts)
+    interface_id = CQLUtils.interface_id(fixtures[:interface_name], fixtures[:major])
+    endpoint_id = CQLUtils.endpoint_id(fixtures[:interface_name], fixtures[:major], fixtures[:endpoint])
+    # Xandra accepts maps, not keyword lists
+    Enum.into(fixtures, %{
+      interface_id: interface_id,
+      endpoint_id: endpoint_id
+    })
+  end
+
 end

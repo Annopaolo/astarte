@@ -587,12 +587,11 @@ defmodule Astarte.RealmManagement.QueriesTest do
     path = "/0/value"
 
     DatabaseTestHelper.seed_individual_datastream_test_data!(
-      "autotestrealm",
-      device_id,
-      interface_name,
-      interface_major,
-      endpoint,
-      path
+      device_id: device_id,
+      interface_name: interface_name,
+      interface_major: interface_major,
+      endpoint: endpoint,
+      path: path
     )
 
     assert [
@@ -632,16 +631,11 @@ defmodule Astarte.RealmManagement.QueriesTest do
     device_id = :crypto.strong_rand_bytes(16)
     interface_name = "com.an.individual.property.Interface"
     interface_major = 0
-    endpoint = "/%{sensorId}/value"
-    path = "/0/value"
 
     DatabaseTestHelper.seed_individual_properties_test_data!(
-      "autotestrealm",
-      device_id,
-      interface_name,
-      interface_major,
-      endpoint,
-      path
+      device_id: device_id,
+      interface_name: interface_name,
+      interface_major: interface_major
     )
 
     assert [
@@ -672,26 +666,26 @@ defmodule Astarte.RealmManagement.QueriesTest do
   end
 
   test "retrieve and delete object datastreams for a device" do
-    interface_name = "com.an.object.datastream.Interface"
+    interface_name = "com.object.datastream.Interface"
     interface_major = 0
-    table_name = CQLUtils.interface_name_to_table_name(interface_name, interface_major)
-    DatabaseTestHelper.create_object_datastream_table!(table_name)
-
     device_id = :crypto.strong_rand_bytes(16)
     path = "/0/value"
 
+    table_name = CQLUtils.interface_name_to_table_name(interface_name, interface_major)
+    DatabaseTestHelper.create_object_datastream_table!(table_name)
+
     DatabaseTestHelper.seed_object_datastream_test_data!(
-      "autotestrealm",
-      device_id,
-      interface_name,
-      interface_major,
-      path
+      realm_name: "autotestrealm",
+      device_id: device_id,
+      interface_name: interface_name,
+      interface_major: interface_major,
+      path: path
     )
 
     assert [
              %{
                device_id: ^device_id,
-               path: path
+               path: ^path
              }
            ] =
              Queries.retrieve_object_datastream_keys!(
@@ -722,19 +716,17 @@ defmodule Astarte.RealmManagement.QueriesTest do
     interface_major = 0
 
     DatabaseTestHelper.add_interface_to_introspection!(
-      "autotestrealm",
-      device_id,
-      interface_name,
-      interface_major
+      realm_name: "autotestrealm",
+      device_id: device_id,
+      interface_name: interface_name,
+      interface_major: interface_major
     )
 
-    assert [%{introspection: introspection}] =
-             Queries.retrieve_device_introspection!(
+    assert %{^interface_name => ^interface_major} =
+             Queries.retrieve_device_introspection_map!(
                "autotestrealm",
                device_id
              )
-
-    assert ^introspection = %{interface_name => interface_major}
   end
 
   test "retrieve interface from introspection" do
@@ -742,9 +734,9 @@ defmodule Astarte.RealmManagement.QueriesTest do
     interface_major = 0
 
     DatabaseTestHelper.seed_interfaces_table_object_test_data!(
-      "autotestrealm",
-      interface_name,
-      interface_major
+      realm_name: "autotestrealm",
+      interface_name: interface_name,
+      interface_major: interface_major
     )
 
     assert %Astarte.Core.InterfaceDescriptor{
@@ -763,9 +755,9 @@ defmodule Astarte.RealmManagement.QueriesTest do
     device_alias = "a boring device alias"
 
     DatabaseTestHelper.seed_aliases_test_data!(
-      "autotestrealm",
-      device_id,
-      device_alias
+      realm_name: "autotestrealm",
+      device_id: device_id,
+      device_alias: device_alias
     )
 
     assert [
@@ -789,10 +781,10 @@ defmodule Astarte.RealmManagement.QueriesTest do
     group = "group"
 
     DatabaseTestHelper.seed_groups_test_data!(
-      "autotestrealm",
-      group,
-      insertion_uuid,
-      device_id
+      realm_name: "autotestrealm",
+      group_name: group,
+      insertion_uuid: insertion_uuid,
+      device_id: device_id
     )
 
     assert [
@@ -822,10 +814,9 @@ defmodule Astarte.RealmManagement.QueriesTest do
     encoded_device_id = Astarte.Core.Device.encode_device_id(device_id)
 
     DatabaseTestHelper.seed_kv_store_test_data!(
-      "autotestrealm",
-      group,
-      encoded_device_id,
-      nil
+      realm_name: "autotestrealm",
+      group: group,
+      key: encoded_device_id
     )
 
     assert [
@@ -833,15 +824,15 @@ defmodule Astarte.RealmManagement.QueriesTest do
                group: ^group,
                key: ^encoded_device_id
              }
-           ] = Queries.retrieve_kv_store_keys!("autotestrealm", encoded_device_id)
+           ] = Queries.retrieve_kv_store_entries!("autotestrealm", encoded_device_id)
 
     assert %Xandra.Void{} =
-             Queries.delete_kv_store_values!(
+             Queries.delete_kv_store_entry!(
                "autotestrealm",
                group,
                encoded_device_id
              )
 
-    assert [] = Queries.retrieve_kv_store_keys!("autotestrealm", encoded_device_id)
+    assert [] = Queries.retrieve_kv_store_entries!("autotestrealm", encoded_device_id)
   end
 end
