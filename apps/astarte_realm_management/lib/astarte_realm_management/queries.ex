@@ -1758,14 +1758,14 @@ defmodule Astarte.RealmManagement.Queries do
   end
 
   # TODO maybe move to AstarteDataAccess
-  def retrieve_device_introspection!(realm_name, device_id) do
+  def retrieve_device_introspection_map!(realm_name, device_id) do
     Xandra.Cluster.run(
       :xandra_device_deletion,
-      &do_retrieve_introspection!(&1, realm_name, device_id)
+      &do_retrieve_introspection_map!(&1, realm_name, device_id)
     )
   end
 
-  defp do_retrieve_introspection!(conn, realm_name, device_id) do
+  defp do_retrieve_introspection_map!(conn, realm_name, device_id) do
     # TODO: validate realm name
     statement = """
     SELECT introspection
@@ -1776,8 +1776,11 @@ defmodule Astarte.RealmManagement.Queries do
     params = %{device_id: device_id}
     prepared = Xandra.prepare!(conn, statement)
 
-    Xandra.execute!(conn, prepared, params, consistency: :quorum, uuid_format: :binary)
-    |> Enum.to_list()
+    [%{introspection: introspection_map}] =
+      Xandra.execute!(conn, prepared, params, consistency: :quorum, uuid_format: :binary)
+      |> Enum.to_list()
+
+    introspection_map
   end
 
   def retrieve_interface_descriptor!(
@@ -2106,14 +2109,14 @@ defmodule Astarte.RealmManagement.Queries do
     )
   end
 
-  def retrieve_kv_store_keys!(realm_name, device_id) do
+  def retrieve_kv_store_entries!(realm_name, device_id) do
     Xandra.Cluster.run(
       :xandra_device_deletion,
-      &do_retrieve_kv_store_keys!(&1, realm_name, device_id)
+      &do_retrieve_kv_store_entries!(&1, realm_name, device_id)
     )
   end
 
-  defp do_retrieve_kv_store_keys!(conn, realm_name, encoded_device_id) do
+  defp do_retrieve_kv_store_entries!(conn, realm_name, encoded_device_id) do
     # TODO: validate realm name
     statement = """
     SELECT group, key
@@ -2127,14 +2130,14 @@ defmodule Astarte.RealmManagement.Queries do
     Xandra.execute!(conn, prepared, params, uuid_format: :binary) |> Enum.to_list()
   end
 
-  def delete_kv_store_values!(realm_name, group, key) do
+  def delete_kv_store_entry!(realm_name, group, key) do
     Xandra.Cluster.run(
       :xandra_device_deletion,
-      &do_delete_kv_store_values!(&1, realm_name, group, key)
+      &do_delete_kv_store_entry!(&1, realm_name, group, key)
     )
   end
 
-  defp do_delete_kv_store_values!(conn, realm_name, group, key) do
+  defp do_delete_kv_store_entry!(conn, realm_name, group, key) do
     # TODO: validate realm name
     statement = """
     DELETE FROM #{realm_name}.kv_store
