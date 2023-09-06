@@ -36,86 +36,75 @@ defmodule Astarte.RealmManagement.DeviceRemoval.DeviceRemover do
     encoded_device_id = Device.encode_device_id(device_id)
     _ = Logger.info("Starting to remove device #{encoded_device_id}", tag: "device_delete_start")
 
-    datastream_keys = Queries.retrieve_individual_datastreams_keys!(realm_name, device_id)
-    :ok = delete_individual_datastreams!(realm_name, datastream_keys)
-    property_keys = Queries.retrieve_individual_properties_keys!(realm_name, device_id)
-    :ok = delete_individual_properties!(realm_name, property_keys)
-    introspection = retrieve_device_introspection_map!(realm_name, device_id)
-    object_interfaces = filter_object_interfaces!(realm_name, introspection)
-    object_tables = Enum.map(object_interfaces, &object_interface_to_table_name/1)
+    Queries.retrieve_individual_datastreams_keys!(realm_name, device_id)
+    |> Enum.each(&delete_individual_datastreams_from_key!(realm_name, &1))
 
-    object_keys_with_table_name =
-      retrieve_object_datastream_keys!(realm_name, device_id, object_tables)
+    Queries.retrieve_individual_properties_keys!(realm_name, device_id)
+    |> Enum.each(&delete_individual_properties_from_key!(realm_name, &1))
 
-    :ok = delete_object_datastreams!(realm_name, object_keys_with_table_name)
-    aliases = retrieve_aliases_for_device!(realm_name, device_id)
-    :ok = Enum.each(aliases, &Queries.delete_alias_values!(realm_name, &1))
-    group_keys = Queries.retrieve_groups_keys!(realm_name, device_id)
-    :ok = delete_groups!(realm_name, group_keys)
-    kv_store_keys = Queries.retrieve_kv_store_keys!(realm_name, encoded_device_id)
-    :ok = delete_kv_store_values!(realm_name, kv_store_keys)
-    %Xandra.Void{} = Queries.delete_device!(realm_name, device_id)
-    %Xandra.Void{} = Queries.remove_device_from_deletion_in_progress!(realm_name, device_id)
+    retrieve_object_datastream_keys!(realm_name, device_id)
+    |> Enum.each(&delete_object_datastreams_from_key!(realm_name, &1))
+
+    retrieve_aliases_for_device!(realm_name, device_id)
+    |> Enum.each(&Queries.delete_alias_values!(realm_name, &1))
+
+    Queries.retrieve_groups_keys!(realm_name, device_id)
+    |> Enum.each(&delete_group_from_key!(realm_name, &1))
+
+    Queries.retrieve_kv_store_entries!(realm_name, encoded_device_id)
+    |> Enum.each(&delete_kv_store_entry!(realm_name, &1))
+
+    Queries.delete_device!(realm_name, device_id)
+    Queries.remove_device_from_deletion_in_progress!(realm_name, device_id)
     _ = Logger.info("Successfully removed device #{encoded_device_id}", tag: "device_delete_ok")
     :ok
   end
 
-  defp delete_individual_datastreams!(realm_name, keys) do
-    Enum.each(keys, fn key ->
-      %{
-        device_id: device_id,
-        interface_id: interface_id,
-        endpoint_id: endpoint_id,
-        path: path
-      } = key
+  defp delete_individual_datastreams_from_key!(realm_name, key) do
+    %{
+      device_id: device_id,
+      interface_id: interface_id,
+      endpoint_id: endpoint_id,
+      path: path
+    } = key
 
-      Queries.delete_individual_datastream_values!(
-        realm_name,
-        device_id,
-        interface_id,
-        endpoint_id,
-        path
-      )
-    end)
+    Queries.delete_individual_datastream_values!(
+      realm_name,
+      device_id,
+      interface_id,
+      endpoint_id,
+      path
+    )
   end
 
-  defp delete_individual_properties!(realm_name, keys) do
-    Enum.each(keys, fn key ->
-      %{
-        device_id: device_id,
-        interface_id: interface_id
-      } = key
+  defp delete_individual_properties_from_key!(realm_name, key) do
+    %{
+      device_id: device_id,
+      interface_id: interface_id
+    } = key
 
-      Queries.delete_individual_properties_values!(realm_name, device_id, interface_id)
-    end)
+    Queries.delete_individual_properties_values!(realm_name, device_id, interface_id)
   end
 
-  defp retrieve_device_introspection_map!(realm_name, device_id) do
-    Queries.retrieve_device_introspection!(realm_name, device_id)
-    |> Enum.flat_map(fn %{introspection: introspection} -> introspection end)
-  end
-
-  defp filter_object_interfaces!(realm_name, introspection) do
-    introspection
-    |> Enum.filter(fn {interface_name, interface_major} ->
-      case Queries.retrieve_interface_descriptor!(realm_name, interface_name, interface_major) do
-        %InterfaceDescriptor{aggregation: :object} -> true
-        _ -> false
-      end
-    end)
+  defp check_interface_has_object_aggregation!(realm_name, {interface_name, interface_major}) do
+    case Queries.retrieve_interface_descriptor!(realm_name, interface_name, interface_major) do
+      %InterfaceDescriptor{aggregation: :object} -> true
+      _ -> false
+    end
   end
 
   defp object_interface_to_table_name({interface_name, interface_major}) do
     CQLUtils.interface_name_to_table_name(interface_name, interface_major)
   end
 
-  defp retrieve_object_datastream_keys!(realm_name, device_id, object_tables)
-       when is_list(object_tables) do
-    # Ah yes, >>=
-    Enum.flat_map(object_tables, &retrieve_object_datastream_keys!(realm_name, device_id, &1))
+  defp retrieve_object_datastream_keys!(realm_name, device_id) do
+    Queries.retrieve_device_introspection_map!(realm_name, device_id)
+    |> Enum.filter(&check_interface_has_object_aggregation!(realm_name, &1))
+    |> Enum.map(&object_interface_to_table_name/1)
+    |> Enum.flat_map(&retrieve_object_datastream_table_keys!(realm_name, device_id, &1))
   end
 
-  defp retrieve_object_datastream_keys!(realm_name, device_id, table_name) do
+  defp retrieve_object_datastream_table_keys!(realm_name, device_id, table_name) do
     Queries.retrieve_object_datastream_keys!(
       realm_name,
       device_id,
@@ -124,16 +113,14 @@ defmodule Astarte.RealmManagement.DeviceRemoval.DeviceRemover do
     |> Enum.map(&Map.put(&1, :table_name, table_name))
   end
 
-  defp delete_object_datastreams!(realm_name, keys) do
-    Enum.each(keys, fn key ->
-      %{
-        device_id: device_id,
-        path: path,
-        table_name: table_name
-      } = key
+  defp delete_object_datastreams_from_key!(realm_name, key) do
+    %{
+      device_id: device_id,
+      path: path,
+      table_name: table_name
+    } = key
 
-      Queries.delete_object_datastream_values!(realm_name, device_id, path, table_name)
-    end)
+    Queries.delete_object_datastream_values!(realm_name, device_id, path, table_name)
   end
 
   defp retrieve_aliases_for_device!(realm_name, device_id) do
@@ -141,26 +128,22 @@ defmodule Astarte.RealmManagement.DeviceRemoval.DeviceRemover do
     |> Enum.map(fn %{object_name: device_alias} -> device_alias end)
   end
 
-  defp delete_groups!(realm_name, keys) do
-    Enum.each(keys, fn key ->
-      %{
-        device_id: device_id,
-        group_name: group_name,
-        insertion_uuid: insertion_uuid
-      } = key
+  defp delete_group_from_key!(realm_name, key) do
+    %{
+      device_id: device_id,
+      group_name: group_name,
+      insertion_uuid: insertion_uuid
+    } = key
 
-      Queries.delete_group_values!(realm_name, device_id, group_name, insertion_uuid)
-    end)
+    Queries.delete_group_values!(realm_name, device_id, group_name, insertion_uuid)
   end
 
-  defp delete_kv_store_values!(realm_name, keys) do
-    Enum.each(keys, fn element ->
-      %{
-        group: group_name,
-        key: key
-      } = element
+  defp delete_kv_store_entry!(realm_name, entry) do
+    %{
+      group: group_name,
+      key: key
+    } = entry
 
-      Queries.delete_kv_store_values!(realm_name, group_name, key)
-    end)
+    Queries.delete_kv_store_entry!(realm_name, group_name, key)
   end
 end
