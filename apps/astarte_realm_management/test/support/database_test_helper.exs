@@ -23,6 +23,7 @@ defmodule Astarte.RealmManagement.DatabaseTestHelper do
   alias CQEx.Client, as: DatabaseClient
   alias CQEx.Result, as: DatabaseResult
   alias Astarte.RealmManagement.Config
+  alias Astarte.RealmManagement.DatabaseFixtures
   require Logger
 
   @jwt_public_key_pem """
@@ -398,30 +399,24 @@ defmodule Astarte.RealmManagement.DatabaseTestHelper do
     @jwt_public_key_pem
   end
 
-  def seed_individual_datastream_test_data!(
-        realm_name,
-        device_id,
-        interface_name,
-        major,
-        endpoint,
-        path
-      ) do
-    interface_id = CQLUtils.interface_id(interface_name, major)
-    endpoint_id = CQLUtils.endpoint_id(interface_name, major, endpoint)
+  def seed_individual_datastream_test_data!(opts) do
+    %{
+      interface_name: interface_name,
+      device_id: device_id,
+      realm_name: realm_name
+    } =
+      params =
+      DatabaseFixtures.compute_interface_fixtures(
+        opts,
+        DatabaseFixtures.datastream_values()
+      )
 
     Xandra.Cluster.run(:xandra, fn conn ->
       statement = """
       INSERT INTO #{realm_name}.individual_datastreams
         (device_id, interface_id, endpoint_id, path, value_timestamp, reception_timestamp, reception_timestamp_submillis, integer_value)
-      VALUES (:device_id, :interface_id, :endpoint_id, :path, '2017-09-28 04:06+0000', '2017-09-28 05:06+0000', 0, 42);
+      VALUES (:device_id, :interface_id, :endpoint_id, :path, :value_timestamp, :reception_timestamp, :reception_timestamp_submillis, :value);
       """
-
-      params = %{
-        device_id: device_id,
-        interface_id: interface_id,
-        endpoint_id: endpoint_id,
-        path: path
-      }
 
       prepared = Xandra.prepare!(conn, statement)
       Xandra.execute!(conn, prepared, params)
@@ -440,30 +435,19 @@ defmodule Astarte.RealmManagement.DatabaseTestHelper do
     :ok
   end
 
-  def seed_individual_properties_test_data!(
-        realm_name,
-        device_id,
-        interface_name,
-        major,
-        endpoint,
-        path
-      ) do
-    interface_id = CQLUtils.interface_id(interface_name, major)
-    endpoint_id = CQLUtils.endpoint_id(interface_name, major, endpoint)
+  def seed_individual_properties_test_data!(opts) do
+    %{
+      realm_name: realm_name
+    } =
+      params =
+      DatabaseFixtures.compute_interface_fixtures(opts, DatabaseFixtures.property_values())
 
     Xandra.Cluster.run(:xandra, fn conn ->
       statement = """
       INSERT INTO #{realm_name}.individual_properties
-      (device_id, interface_id, endpoint_id, path)
-      VALUES (:device_id, :interface_id, :endpoint_id, :path)
+      (device_id, interface_id, endpoint_id, path, reception_timestamp, reception_timestamp_submillis, integer_value)
+      VALUES (:device_id, :interface_id, :endpoint_id, :path, :reception_timestamp, :reception_timestamp_submillis, :value)
       """
-
-      params = %{
-        device_id: device_id,
-        interface_id: interface_id,
-        endpoint_id: endpoint_id,
-        path: path
-      }
 
       prepared = Xandra.prepare!(conn, statement)
       Xandra.execute!(conn, prepared, params)
@@ -472,24 +456,20 @@ defmodule Astarte.RealmManagement.DatabaseTestHelper do
     :ok
   end
 
-  def add_interface_to_introspection!(
-        realm_name,
-        device_id,
-        object_datastream_interface,
-        interface_major
-      ) do
+  def add_interface_to_introspection!(opts) do
+    params =
+      DatabaseFixtures.compute_introspection_fixtures(
+        opts,
+        DatabaseFixtures.introspection_values()
+      )
+
     Xandra.Cluster.run(:xandra, fn conn ->
       statement = """
-      INSERT INTO #{realm_name}.devices
+      INSERT INTO #{params[:realm_name]}.devices
       (device_id, introspection)
       VALUES (:device_id, :introspection)
       """
 
-      params = %{
-        device_id: device_id,
-        introspection: %{object_datastream_interface => interface_major}
-      }
-
       prepared = Xandra.prepare!(conn, statement)
       Xandra.execute!(conn, prepared, params)
     end)
@@ -497,28 +477,18 @@ defmodule Astarte.RealmManagement.DatabaseTestHelper do
     :ok
   end
 
-  def seed_interfaces_table_object_test_data!(realm_name, interface_name, interface_major) do
+  def seed_interfaces_table_object_test_data!(opts) do
+    params =
+      DatabaseFixtures.compute_interfaces_object_fixtures(
+        opts,
+        DatabaseFixtures.interfaces_object_values()
+      )
+
     statement = """
-      INSERT INTO #{realm_name}.interfaces
+      INSERT INTO #{opts[:realm_name]}.interfaces
       (name, major_version, minor_version, interface_id, storage_type, storage, type, ownership, aggregation, automaton_transitions, automaton_accepting_states, description, doc)
       VALUES (:name, :major_version, :minor_version, :interface_id, :storage_type, :storage, :type, :ownership, :aggregation, :automaton_transitions, :automaton_accepting_states, :description, :doc)
     """
-
-    params = %{
-      name: interface_name,
-      major_version: interface_major,
-      minor_version: 0,
-      interface_id: CQLUtils.interface_id(interface_name, interface_major),
-      storage_type: 1,
-      storage: "storage",
-      type: 2,
-      ownership: 1,
-      aggregation: 2,
-      automaton_transitions: :erlang.term_to_binary(<<>>),
-      automaton_accepting_states: :erlang.term_to_binary(<<>>),
-      description: "",
-      doc: ""
-    }
 
     prepared = Xandra.Cluster.prepare!(:xandra, statement)
     Xandra.Cluster.execute!(:xandra, prepared, params, uuid_format: :binary)
@@ -536,13 +506,18 @@ defmodule Astarte.RealmManagement.DatabaseTestHelper do
     """)
   end
 
-  def seed_object_datastream_test_data!(
-        realm_name,
-        device_id,
-        interface_name,
-        interface_major,
-        path
-      ) do
+  def seed_object_datastream_test_data!(opts) do
+    %{
+      interface_name: interface_name,
+      interface_major: interface_major,
+      realm_name: realm_name
+    } =
+      params =
+      DatabaseFixtures.compute_interface_fixtures(
+        opts,
+        DatabaseFixtures.datastream_values()
+      )
+
     interface_table = CQLUtils.interface_name_to_table_name(interface_name, interface_major)
 
     Xandra.Cluster.run(:xandra, fn conn ->
@@ -551,11 +526,6 @@ defmodule Astarte.RealmManagement.DatabaseTestHelper do
       VALUES (:device_id, :path);
       """
 
-      params = %{
-        device_id: device_id,
-        path: path
-      }
-
       prepared = Xandra.prepare!(conn, statement)
       Xandra.execute!(conn, prepared, params)
     end)
@@ -563,23 +533,16 @@ defmodule Astarte.RealmManagement.DatabaseTestHelper do
     :ok
   end
 
-  def seed_aliases_test_data!(
-        realm_name,
-        device_id,
-        device_alias
-      ) do
+  def seed_aliases_test_data!(opts) do
+    params = DatabaseFixtures.compute_alias_fixtures(opts, DatabaseFixtures.alias_values())
+
     Xandra.Cluster.run(:xandra, fn conn ->
       statement = """
-      INSERT INTO #{realm_name}.names
+      INSERT INTO #{params[:realm_name]}.names
       (object_name, object_uuid)
       VALUES (:object_name, :object_uuid)
       """
 
-      params = %{
-        object_name: device_alias,
-        object_uuid: device_id
-      }
-
       prepared = Xandra.prepare!(conn, statement)
       Xandra.execute!(conn, prepared, params)
     end)
@@ -587,24 +550,15 @@ defmodule Astarte.RealmManagement.DatabaseTestHelper do
     :ok
   end
 
-  def seed_groups_test_data!(
-        realm_name,
-        group_name,
-        insertion_uuid,
-        device_id
-      ) do
+  def seed_groups_test_data!(opts) do
+    params = DatabaseFixtures.compute_generic_fixtures(opts, DatabaseFixtures.group_values())
+
     Xandra.Cluster.run(:xandra, fn conn ->
       statement = """
-      INSERT INTO #{realm_name}.grouped_devices
+      INSERT INTO #{params[:realm_name]}.grouped_devices
       (group_name, insertion_uuid, device_id)
       VALUES (:group_name, :insertion_uuid, :device_id)
       """
-
-      params = %{
-        group_name: group_name,
-        device_id: device_id,
-        insertion_uuid: insertion_uuid
-      }
 
       prepared = Xandra.prepare!(conn, statement)
       Xandra.execute!(conn, prepared, params, uuid_format: :binary, timeuuid_format: :binary)
@@ -613,24 +567,15 @@ defmodule Astarte.RealmManagement.DatabaseTestHelper do
     :ok
   end
 
-  def seed_kv_store_test_data!(
-        realm_name,
-        group,
-        key,
-        value
-      ) do
+  def seed_kv_store_test_data!(opts) do
+    params = DatabaseFixtures.compute_generic_fixtures(opts, DatabaseFixtures.kv_store_values())
+
     Xandra.Cluster.run(:xandra, fn conn ->
       statement = """
-      INSERT INTO #{realm_name}.kv_store
+      INSERT INTO #{params[:realm_name]}.kv_store
       (group, key, value)
       VALUES (:group, :key, :value)
       """
-
-      params = %{
-        group: group,
-        key: key,
-        value: value
-      }
 
       prepared = Xandra.prepare!(conn, statement)
       Xandra.execute!(conn, prepared, params)
@@ -639,17 +584,15 @@ defmodule Astarte.RealmManagement.DatabaseTestHelper do
     :ok
   end
 
-  def seed_devices_test_data!(realm_name, device_id) do
+  def seed_devices_test_data!(opts) do
+    params = DatabaseFixtures.compute_generic_fixtures(opts, DatabaseFixtures.devices_values())
+
     Xandra.Cluster.run(:xandra, fn conn ->
       statement = """
-      INSERT INTO #{realm_name}.devices
+      INSERT INTO #{params[:realm_name]}.devices
       (device_id)
       VALUES (:device_id)
       """
-
-      params = %{
-        device_id: device_id
-      }
 
       prepared = Xandra.prepare!(conn, statement)
       Xandra.execute!(conn, prepared, params, uuid_format: :binary)
