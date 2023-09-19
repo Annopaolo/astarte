@@ -127,7 +127,7 @@ defmodule Astarte.DataUpdaterPlant.TriggersHandler do
 
   def incoming_data(targets, realm, device_id, interface, path, bson_value, timestamp)
       when is_list(targets) do
-    execute_all_ok(targets, fn {target, policy} ->
+    execute_all_ok(targets, fn %{target: target, policy_name: policy} ->
       incoming_data(target, realm, device_id, interface, path, bson_value, timestamp, policy) ==
         :ok
     end)
@@ -157,7 +157,7 @@ defmodule Astarte.DataUpdaterPlant.TriggersHandler do
 
   def incoming_introspection(targets, realm, device_id, introspection, timestamp)
       when is_list(targets) do
-    execute_all_ok(targets, fn {target, policy} ->
+    execute_all_ok(targets, fn %{target: target, policy_name: policy} ->
       incoming_introspection(target, realm, device_id, introspection, timestamp, policy) == :ok
     end)
   end
@@ -192,7 +192,7 @@ defmodule Astarte.DataUpdaterPlant.TriggersHandler do
         timestamp
       )
       when is_list(targets) do
-    execute_all_ok(targets, fn {target, policy} ->
+    execute_all_ok(targets, fn %{target: target, policy_name: policy} ->
       interface_added(
         target,
         realm,
@@ -253,7 +253,7 @@ defmodule Astarte.DataUpdaterPlant.TriggersHandler do
         timestamp
       )
       when is_list(targets) do
-    execute_all_ok(targets, fn {target, policy} ->
+    execute_all_ok(targets, fn %{target: target, policy_name: policy} ->
       interface_minor_updated(
         target,
         realm,
@@ -298,7 +298,7 @@ defmodule Astarte.DataUpdaterPlant.TriggersHandler do
 
   def interface_removed(targets, realm, device_id, interface, major_version, timestamp)
       when is_list(targets) do
-    execute_all_ok(targets, fn {target, policy} ->
+    execute_all_ok(targets, fn %{target: target, policy_name: policy} ->
       interface_removed(target, realm, device_id, interface, major_version, timestamp, policy) ==
         :ok
     end)
@@ -327,7 +327,7 @@ defmodule Astarte.DataUpdaterPlant.TriggersHandler do
 
   def path_created(targets, realm, device_id, interface, path, bson_value, timestamp)
       when is_list(targets) do
-    execute_all_ok(targets, fn {target, policy} ->
+    execute_all_ok(targets, fn %{target: target, policy_name: policy} ->
       path_created(target, realm, device_id, interface, path, bson_value, timestamp, policy) ==
         :ok
     end)
@@ -356,7 +356,7 @@ defmodule Astarte.DataUpdaterPlant.TriggersHandler do
   end
 
   def path_removed(targets, realm, device_id, interface, path, timestamp) when is_list(targets) do
-    execute_all_ok(targets, fn {target, policy} ->
+    execute_all_ok(targets, fn %{target: target, policy_name: policy} ->
       path_removed(target, realm, device_id, interface, path, timestamp, policy) == :ok
     end)
   end
@@ -385,7 +385,7 @@ defmodule Astarte.DataUpdaterPlant.TriggersHandler do
         timestamp
       )
       when is_list(targets) do
-    execute_all_ok(targets, fn {target, policy} ->
+    execute_all_ok(targets, fn %{target: target, policy_name: policy} ->
       value_change(
         target,
         realm,
@@ -440,7 +440,7 @@ defmodule Astarte.DataUpdaterPlant.TriggersHandler do
         timestamp
       )
       when is_list(targets) do
-    execute_all_ok(targets, fn {target, policy} ->
+    execute_all_ok(targets, fn %{target: target, policy_name: policy} ->
       value_change_applied(
         target,
         realm,

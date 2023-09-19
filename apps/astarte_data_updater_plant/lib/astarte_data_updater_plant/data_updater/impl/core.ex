@@ -64,11 +64,10 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl.Core do
 
     # any interface triggers
     get_on_data_triggers(state, :on_incoming_data, :any_interface, :any_endpoint)
-    |> Enum.each(fn trigger ->
-      target_with_policy_list = get_target_with_policy_list(state, trigger)
-
-      TriggersHandler.incoming_data(
-        target_with_policy_list,
+    |> Enum.each(
+      &execute_incoming_data_trigger(
+        &1,
+        state,
         realm,
         device,
         interface,
@@ -76,15 +75,14 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl.Core do
         payload,
         timestamp
       )
-    end)
+    )
 
     # any endpoint triggers
     get_on_data_triggers(state, :on_incoming_data, interface_id, :any_endpoint)
-    |> Enum.each(fn trigger ->
-      target_with_policy_list = get_target_with_policy_list(state, trigger)
-
-      TriggersHandler.incoming_data(
-        target_with_policy_list,
+    |> Enum.each(
+      &execute_incoming_data_trigger(
+        &1,
+        state,
         realm,
         device,
         interface,
@@ -92,15 +90,14 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl.Core do
         payload,
         timestamp
       )
-    end)
+    )
 
     # incoming data triggers
     get_on_data_triggers(state, :on_incoming_data, interface_id, endpoint_id, path, value)
-    |> Enum.each(fn trigger ->
-      target_with_policy_list = get_target_with_policy_list(state, trigger)
-
-      TriggersHandler.incoming_data(
-        target_with_policy_list,
+    |> Enum.each(
+      &execute_incoming_data_trigger(
+        &1,
+        state,
         realm,
         device,
         interface,
@@ -108,16 +105,32 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl.Core do
         payload,
         timestamp
       )
-    end)
+    )
 
     :ok
   end
 
-  def get_target_with_policy_list(state, trigger) do
-    trigger.trigger_targets
-    |> Enum.map(fn target ->
-      {target, Map.get(state.trigger_id_to_policy_name, target.parent_trigger_id)}
-    end)
+  defp execute_incoming_data_trigger(
+         trigger,
+         state,
+         realm,
+         device,
+         interface,
+         path,
+         payload,
+         timestamp
+       ) do
+    target_with_policy_list = get_target_with_policy_list(state, trigger)
+
+    TriggersHandler.incoming_data(
+      target_with_policy_list,
+      realm,
+      device,
+      interface,
+      path,
+      payload,
+      timestamp
+    )
   end
 
   def get_value_change_triggers(state, interface_id, endpoint_id, path, value) do
@@ -167,10 +180,7 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl.Core do
     if previous_value != value do
       Enum.each(value_change_triggers, fn trigger ->
         trigger_target_with_policy_list =
-          trigger.trigger_targets
-          |> Enum.map(fn target ->
-            {target, Map.get(trigger_id_to_policy_name_map, target.parent_trigger_id)}
-          end)
+          get_target_with_policy_list(trigger_id_to_policy_name_map, trigger)
 
         TriggersHandler.value_change(
           trigger_target_with_policy_list,
@@ -204,14 +214,11 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl.Core do
 
     if previous_value == nil and value != nil do
       Enum.each(path_created_triggers, fn trigger ->
-        target_with_policy_list =
-          trigger.trigger_targets
-          |> Enum.map(fn target ->
-            {target, Map.get(trigger_id_to_policy_name_map, target.parent_trigger_id)}
-          end)
+        trigger_target_with_policy_list =
+          get_target_with_policy_list(trigger_id_to_policy_name_map, trigger)
 
         TriggersHandler.path_created(
-          target_with_policy_list,
+          trigger_target_with_policy_list,
           realm,
           device,
           interface,
@@ -224,14 +231,11 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl.Core do
 
     if previous_value != nil and value == nil do
       Enum.each(path_removed_triggers, fn trigger ->
-        target_with_policy_list =
-          trigger.trigger_targets
-          |> Enum.map(fn target ->
-            {target, Map.get(trigger_id_to_policy_name_map, target.parent_trigger_id)}
-          end)
+        trigger_target_with_policy_list =
+          get_target_with_policy_list(trigger_id_to_policy_name_map, trigger)
 
         TriggersHandler.path_removed(
-          target_with_policy_list,
+          trigger_target_with_policy_list,
           realm,
           device,
           interface,
@@ -243,14 +247,11 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl.Core do
 
     if previous_value != value do
       Enum.each(value_change_applied_triggers, fn trigger ->
-        target_with_policy_list =
-          trigger.trigger_targets
-          |> Enum.map(fn target ->
-            {target, Map.get(trigger_id_to_policy_name_map, target.parent_trigger_id)}
-          end)
+        trigger_target_with_policy_list =
+          get_target_with_policy_list(trigger_id_to_policy_name_map, trigger)
 
         TriggersHandler.value_change_applied(
-          target_with_policy_list,
+          trigger_target_with_policy_list,
           realm,
           device,
           interface,
@@ -270,9 +271,7 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl.Core do
 
     trigger_target_with_policy_list =
       Map.get(state.device_triggers, :on_device_error, [])
-      |> Enum.map(fn target ->
-        {target, Map.get(state.trigger_id_to_policy_name, target.parent_trigger_id)}
-      end)
+      |> Enum.map(&policy_and_target_from_target(state, &1))
 
     device_id_string = Device.encode_device_id(state.device_id)
 
@@ -459,9 +458,7 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl.Core do
 
     on_introspection_target_with_policy_list =
       Map.get(device_triggers, :on_incoming_introspection, [])
-      |> Enum.map(fn target ->
-        {target, Map.get(state.trigger_id_to_policy_name, target.parent_trigger_id)}
-      end)
+      |> Enum.map(&policy_and_target_from_target(state, &1))
 
     TriggersHandler.incoming_introspection(
       on_introspection_target_with_policy_list,
@@ -512,9 +509,7 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl.Core do
                  []
                ) ++
                  Map.get(device_triggers, {:on_interface_added, :any_interface}, []))
-              |> Enum.map(fn target ->
-                {target, Map.get(state.trigger_id_to_policy_name, target.parent_trigger_id)}
-              end)
+              |> Enum.map(&policy_and_target_from_target(state, &1))
 
             TriggersHandler.interface_added(
               interface_added_target_with_policy_list,
@@ -550,9 +545,7 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl.Core do
                  []
                ) ++
                  Map.get(device_triggers, {:on_interface_removed, :any_interface}, []))
-              |> Enum.map(fn target ->
-                {target, Map.get(state.trigger_id_to_policy_name, target.parent_trigger_id)}
-              end)
+              |> Enum.map(&policy_and_target_from_target(state, &1))
 
             TriggersHandler.interface_removed(
               interface_removed_target_with_policy_list,
@@ -609,9 +602,7 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl.Core do
 
       interface_minor_updated_target_with_policy_list =
         Map.get(device_triggers, {:on_interface_minor_updated, interface_id}, [])
-        |> Enum.map(fn target ->
-          {target, Map.get(state.trigger_id_to_policy_name, target.parent_trigger_id)}
-        end)
+        |> Enum.map(&policy_and_target_from_target(state, &1))
 
       TriggersHandler.interface_minor_updated(
         interface_minor_updated_target_with_policy_list,
@@ -903,9 +894,7 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl.Core do
           Enum.each(path_removed_triggers, fn trigger ->
             target_with_policy_list =
               trigger.trigger_targets
-              |> Enum.map(fn target ->
-                {target, Map.get(state.trigger_id_to_policy_name, target.parent_trigger_id)}
-              end)
+              |> Enum.map(&policy_and_target_from_target(state, &1))
 
             TriggersHandler.path_removed(
               target_with_policy_list,
@@ -936,9 +925,7 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl.Core do
 
     trigger_target_with_policy_list =
       Map.get(state.device_triggers, :on_device_disconnection, [])
-      |> Enum.map(fn target ->
-        {target, Map.get(state.trigger_id_to_policy_name, target.parent_trigger_id)}
-      end)
+      |> Enum.map(&policy_and_target_from_target(state, &1))
 
     device_id_string = Device.encode_device_id(state.device_id)
 
