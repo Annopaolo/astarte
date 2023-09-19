@@ -432,49 +432,6 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl.Core do
     |> update_interface_stats(interface, major, path, payload)
   end
 
-  def update_interface_stats(state, interface, major, _path, _payload)
-      when interface == "" or major == nil do
-    # Skip when we can't identify a specific major or interface is empty (e.g. control messages)
-    # TODO: restructure code to access major version even in the else branch of handle_data
-    state
-  end
-
-  def update_interface_stats(state, interface, major, path, payload) do
-    %State{
-      initial_interface_exchanged_bytes: initial_interface_exchanged_bytes,
-      initial_interface_exchanged_msgs: initial_interface_exchanged_msgs,
-      interface_exchanged_bytes: interface_exchanged_bytes,
-      interface_exchanged_msgs: interface_exchanged_msgs
-    } = state
-
-    bytes = byte_size(payload) + byte_size(interface) + byte_size(path)
-
-    # If present, get exchanged bytes from live count, otherwise fallback to initial
-    # count and in case nothing is there too, fallback to 0
-    exchanged_bytes =
-      Map.get_lazy(interface_exchanged_bytes, {interface, major}, fn ->
-        Map.get(initial_interface_exchanged_bytes, {interface, major}, 0)
-      end)
-
-    # As above but with msgs
-    exchanged_msgs =
-      Map.get_lazy(interface_exchanged_msgs, {interface, major}, fn ->
-        Map.get(initial_interface_exchanged_msgs, {interface, major}, 0)
-      end)
-
-    updated_interface_exchanged_bytes =
-      Map.put(interface_exchanged_bytes, {interface, major}, exchanged_bytes + bytes)
-
-    updated_interface_exchanged_msgs =
-      Map.put(interface_exchanged_msgs, {interface, major}, exchanged_msgs + 1)
-
-    %{
-      state
-      | interface_exchanged_bytes: updated_interface_exchanged_bytes,
-        interface_exchanged_msgs: updated_interface_exchanged_msgs
-    }
-  end
-
   def process_introspection(state, new_introspection_list, payload, message_id, timestamp) do
     {:ok, db_client} = Database.connect(realm: state.realm)
 
@@ -787,142 +744,12 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl.Core do
     {:ok, %{state | device_triggers: updated_device_triggers}}
   end
 
-  def reload_groups_on_expiry(state, timestamp, db_client) do
-    if state.last_groups_refresh + @groups_lifespan_decimicroseconds <= timestamp do
-      {:ok, groups} = Queries.get_device_groups(db_client, state.device_id)
-
-      %{state | last_groups_refresh: timestamp, groups: groups}
-    else
-      state
-    end
-  end
-
-  def reload_device_triggers_on_expiry(state, timestamp, db_client) do
-    if state.last_device_triggers_refresh + @device_triggers_lifespan_decimicroseconds <=
-         timestamp do
-      any_device_id = SimpleTriggersProtobufUtils.any_device_object_id()
-
-      any_interface_id = SimpleTriggersProtobufUtils.any_interface_object_id()
-
-      device_and_any_interface_object_id =
-        SimpleTriggersProtobufUtils.get_device_and_any_interface_object_id(state.device_id)
-
-      # TODO when introspection triggers are supported, we should also forget any_interface
-      # introspection triggers here, or handle them separately
-
-      state
-      |> Map.put(:last_device_triggers_refresh, timestamp)
-      |> Map.put(:device_triggers, %{})
-      |> forget_any_interface_data_triggers()
-      |> populate_triggers_for_object!(db_client, any_device_id, :any_device)
-      |> populate_triggers_for_object!(db_client, state.device_id, :device)
-      |> populate_triggers_for_object!(db_client, any_interface_id, :any_interface)
-      |> populate_triggers_for_object!(
-        db_client,
-        device_and_any_interface_object_id,
-        :device_and_any_interface
-      )
-      |> populate_group_device_triggers!(db_client)
-      |> populate_group_and_any_interface_triggers!(db_client)
-    else
-      state
-    end
-  end
-
-  def populate_group_device_triggers!(state, db_client) do
-    Enum.map(state.groups, &SimpleTriggersProtobufUtils.get_group_object_id/1)
-    |> Enum.reduce(state, &populate_triggers_for_object!(&2, db_client, &1, :group))
-  end
-
-  def populate_group_and_any_interface_triggers!(state, db_client) do
-    Enum.map(state.groups, &SimpleTriggersProtobufUtils.get_group_and_any_interface_object_id/1)
-    |> Enum.reduce(
-      state,
-      &populate_triggers_for_object!(&2, db_client, &1, :group_and_any_interface)
-    )
-  end
-
   def execute_time_based_actions(state, timestamp, db_client) do
     state
     |> Map.put(:last_seen_message, timestamp)
     |> reload_groups_on_expiry(timestamp, db_client)
     |> purge_expired_interfaces(timestamp)
     |> reload_device_triggers_on_expiry(timestamp, db_client)
-  end
-
-  def purge_expired_interfaces(state, timestamp) do
-    expired =
-      Enum.take_while(state.interfaces_by_expiry, fn {expiry, _interface} ->
-        expiry <= timestamp
-      end)
-
-    new_interfaces_by_expiry = Enum.drop(state.interfaces_by_expiry, length(expired))
-
-    interfaces_to_drop_list =
-      for {_exp, iface} <- expired do
-        iface
-      end
-
-    state
-    |> forget_interfaces(interfaces_to_drop_list)
-    |> Map.put(:interfaces_by_expiry, new_interfaces_by_expiry)
-  end
-
-  def forget_any_interface_data_triggers(state) do
-    updated_data_triggers =
-      for {{_type, iface_id, _endpoint} = key, value} <- state.data_triggers,
-          iface_id != :any_interface,
-          into: %{} do
-        {key, value}
-      end
-
-    %{state | data_triggers: updated_data_triggers}
-  end
-
-  def forget_interfaces(state, []) do
-    state
-  end
-
-  def forget_interfaces(state, interfaces_to_drop) do
-    iface_ids_to_drop =
-      Enum.filter(interfaces_to_drop, &Map.has_key?(state.interfaces, &1))
-      |> Enum.map(fn iface ->
-        Map.fetch!(state.interfaces, iface).interface_id
-      end)
-
-    updated_triggers =
-      Enum.reduce(iface_ids_to_drop, state.data_triggers, fn interface_id, data_triggers ->
-        Enum.reject(data_triggers, fn {{_event_type, iface_id, _endpoint}, _val} ->
-          iface_id == interface_id
-        end)
-        |> Enum.into(%{})
-      end)
-
-    updated_mappings =
-      Enum.reduce(iface_ids_to_drop, state.mappings, fn interface_id, mappings ->
-        Enum.reject(mappings, fn {_endpoint_id, mapping} ->
-          mapping.interface_id == interface_id
-        end)
-        |> Enum.into(%{})
-      end)
-
-    updated_ids =
-      Enum.reduce(iface_ids_to_drop, state.interface_ids_to_name, fn interface_id, ids ->
-        Map.delete(ids, interface_id)
-      end)
-
-    updated_interfaces =
-      Enum.reduce(interfaces_to_drop, state.interfaces, fn iface, ifaces ->
-        Map.delete(ifaces, iface)
-      end)
-
-    %{
-      state
-      | interfaces: updated_interfaces,
-        interface_ids_to_name: updated_ids,
-        mappings: updated_mappings,
-        data_triggers: updated_triggers
-    }
   end
 
   def maybe_handle_cache_miss(nil, interface_name, state, db_client) do
@@ -1178,34 +1005,6 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl.Core do
     end
   end
 
-  def get_on_data_triggers(state, event, interface_id, endpoint_id) do
-    key = {event, interface_id, endpoint_id}
-
-    Map.get(state.data_triggers, key, [])
-  end
-
-  def get_on_data_triggers(state, event, interface_id, endpoint_id, path, value \\ nil) do
-    key = {event, interface_id, endpoint_id}
-
-    candidate_triggers = Map.get(state.data_triggers, key, nil)
-
-    if candidate_triggers do
-      ["" | path_tokens] = String.split(path, "/")
-
-      for trigger <- candidate_triggers,
-          path_matches?(path_tokens, trigger.path_match_tokens) and
-            ValueMatchOperators.value_matches?(
-              value,
-              trigger.value_match_operator,
-              trigger.known_value
-            ) do
-        trigger
-      end
-    else
-      []
-    end
-  end
-
   def path_matches?([], []) do
     true
   end
@@ -1349,50 +1148,6 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl.Core do
     |> maybe_cache_trigger_policy(trigger_target)
   end
 
-  def device_trigger_to_key(event_type, proto_buf_device_trigger) do
-    case event_type do
-      :on_interface_added ->
-        {event_type, introspection_trigger_interface(proto_buf_device_trigger)}
-
-      :on_interface_removed ->
-        {event_type, introspection_trigger_interface(proto_buf_device_trigger)}
-
-      :on_interface_minor_updated ->
-        {event_type, introspection_trigger_interface(proto_buf_device_trigger)}
-
-      # other device triggers do not care about interfaces
-      _ ->
-        event_type
-    end
-  end
-
-  def introspection_trigger_interface(%ProtobufDeviceTrigger{
-        interface_name: interface_name,
-        interface_major: interface_major
-      }) do
-    SimpleTriggersProtobufUtils.get_interface_id_or_any(interface_name, interface_major)
-  end
-
-  # TODO: consider what we should to with the cached policy if/when we allow updating a policy
-  def maybe_cache_trigger_policy(state, %AMQPTriggerTarget{parent_trigger_id: parent_trigger_id}) do
-    %State{realm: realm_name, trigger_id_to_policy_name: trigger_id_to_policy_name} = state
-
-    case PolicyQueries.retrieve_policy_name(
-           realm_name,
-           parent_trigger_id
-         ) do
-      {:ok, policy_name} ->
-        next_trigger_id_to_policy_name =
-          Map.put(trigger_id_to_policy_name, parent_trigger_id, policy_name)
-
-        %{state | trigger_id_to_policy_name: next_trigger_id_to_policy_name}
-
-      # @default policy is not installed, so here are triggers without policy
-      {:error, :policy_not_found} ->
-        state
-    end
-  end
-
   def resolve_path(path, interface_descriptor, mappings) do
     case interface_descriptor.aggregation do
       :individual ->
@@ -1468,27 +1223,6 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl.Core do
     end
   end
 
-  def check_object_aggregation_prefix(path, guessed_endpoints, mappings) do
-    received_path_depth = path_or_endpoint_depth(path)
-
-    Enum.reduce_while(guessed_endpoints, :ok, fn
-      endpoint_id, _acc ->
-        with {:ok, %Mapping{endpoint: endpoint}} <- Map.fetch(mappings, endpoint_id),
-             endpoint_depth when received_path_depth == endpoint_depth - 1 <-
-               path_or_endpoint_depth(endpoint) do
-          {:cont, :ok}
-        else
-          _ ->
-            {:halt, {:error, :invalid_object_aggregation_path}}
-        end
-    end)
-  end
-
-  def path_or_endpoint_depth(path) when is_binary(path) do
-    String.split(path, "/", trim: true)
-    |> length()
-  end
-
   def can_write_on_interface?(interface_descriptor) do
     case interface_descriptor.ownership do
       :device ->
@@ -1497,24 +1231,6 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl.Core do
       :server ->
         {:error, :cannot_write_on_server_owned_interface}
     end
-  end
-
-  def each_interface_mapping(mappings, interface_descriptor, fun) do
-    Enum.each(mappings, fn {_endpoint_id, mapping} ->
-      if mapping.interface_id == interface_descriptor.interface_id do
-        fun.(mapping)
-      end
-    end)
-  end
-
-  def reduce_interface_mapping(mappings, interface_descriptor, initial_acc, fun) do
-    Enum.reduce(mappings, initial_acc, fn {_endpoint_id, mapping}, acc ->
-      if mapping.interface_id == interface_descriptor.interface_id do
-        fun.(mapping, acc)
-      else
-        acc
-      end
-    end)
   end
 
   def send_control_consumer_properties(state, db_client) do
@@ -1541,23 +1257,6 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl.Core do
     end
   end
 
-  def gather_interface_properties(
-        %State{device_id: device_id, mappings: mappings} = _state,
-        db_client,
-        %InterfaceDescriptor{type: :properties, ownership: :server} = interface_descriptor
-      ) do
-    reduce_interface_mapping(mappings, interface_descriptor, [], fn mapping, i_acc ->
-      Queries.retrieve_endpoint_values(db_client, device_id, interface_descriptor, mapping)
-      |> Enum.reduce(i_acc, fn [{:path, path}, {_, _value}], acc ->
-        ["#{interface_descriptor.name}#{path}" | acc]
-      end)
-    end)
-  end
-
-  def gather_interface_properties(_state, _db, %InterfaceDescriptor{} = _descriptor) do
-    []
-  end
-
   def resend_all_properties(state, db_client) do
     Logger.debug("Device introspection: #{inspect(state.introspection)}")
 
@@ -1579,11 +1278,331 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl.Core do
     end)
   end
 
-  def resend_all_interface_properties(
-        %State{realm: realm, device_id: device_id, mappings: mappings} = _state,
+  defp policy_and_target_from_target(
+         %State{trigger_id_to_policy_name: trigger_id_to_policy_name},
+         trigger_target
+       ) do
+    policy_name = trigger_id_to_policy_name[trigger_target.parent_trigger_id]
+    %{target: trigger_target, policy_name: policy_name}
+  end
+
+  defp get_target_with_policy_list(
+         %State{trigger_id_to_policy_name: trigger_id_to_policy_name},
+         trigger
+       ) do
+    get_target_with_policy_list(trigger_id_to_policy_name, trigger)
+  end
+
+  defp get_target_with_policy_list(trigger_id_to_policy_name, trigger)
+       when is_map(trigger_id_to_policy_name) do
+    for target <- trigger.trigger_targets do
+      policy_name = trigger_id_to_policy_name[target.parent_trigger_id]
+      %{target: target, policy_name: policy_name}
+    end
+  end
+
+  defp update_interface_stats(state, interface, major, _path, _payload)
+       when interface == "" or major == nil do
+    # Skip when we can't identify a specific major or interface is empty (e.g. control messages)
+    # TODO: restructure code to access major version even in the else branch of handle_data
+    state
+  end
+
+  defp update_interface_stats(state, interface, major, path, payload) do
+    %State{
+      initial_interface_exchanged_bytes: initial_interface_exchanged_bytes,
+      initial_interface_exchanged_msgs: initial_interface_exchanged_msgs,
+      interface_exchanged_bytes: interface_exchanged_bytes,
+      interface_exchanged_msgs: interface_exchanged_msgs
+    } = state
+
+    bytes = byte_size(payload) + byte_size(interface) + byte_size(path)
+
+    # If present, get exchanged bytes from live count, otherwise fallback to initial
+    # count and in case nothing is there too, fallback to 0
+    exchanged_bytes =
+      Map.get_lazy(interface_exchanged_bytes, {interface, major}, fn ->
+        Map.get(initial_interface_exchanged_bytes, {interface, major}, 0)
+      end)
+
+    # As above but with msgs
+    exchanged_msgs =
+      Map.get_lazy(interface_exchanged_msgs, {interface, major}, fn ->
+        Map.get(initial_interface_exchanged_msgs, {interface, major}, 0)
+      end)
+
+    updated_interface_exchanged_bytes =
+      Map.put(interface_exchanged_bytes, {interface, major}, exchanged_bytes + bytes)
+
+    updated_interface_exchanged_msgs =
+      Map.put(interface_exchanged_msgs, {interface, major}, exchanged_msgs + 1)
+
+    %{
+      state
+      | interface_exchanged_bytes: updated_interface_exchanged_bytes,
+        interface_exchanged_msgs: updated_interface_exchanged_msgs
+    }
+  end
+
+  defp reload_groups_on_expiry(state, timestamp, db_client) do
+    if state.last_groups_refresh + @groups_lifespan_decimicroseconds <= timestamp do
+      {:ok, groups} = Queries.get_device_groups(db_client, state.device_id)
+
+      %{state | last_groups_refresh: timestamp, groups: groups}
+    else
+      state
+    end
+  end
+
+  defp reload_device_triggers_on_expiry(state, timestamp, db_client) do
+    if state.last_device_triggers_refresh + @device_triggers_lifespan_decimicroseconds <=
+         timestamp do
+      any_device_id = SimpleTriggersProtobufUtils.any_device_object_id()
+
+      any_interface_id = SimpleTriggersProtobufUtils.any_interface_object_id()
+
+      device_and_any_interface_object_id =
+        SimpleTriggersProtobufUtils.get_device_and_any_interface_object_id(state.device_id)
+
+      # TODO when introspection triggers are supported, we should also forget any_interface
+      # introspection triggers here, or handle them separately
+
+      state
+      |> Map.put(:last_device_triggers_refresh, timestamp)
+      |> Map.put(:device_triggers, %{})
+      |> forget_any_interface_data_triggers()
+      |> populate_triggers_for_object!(db_client, any_device_id, :any_device)
+      |> populate_triggers_for_object!(db_client, state.device_id, :device)
+      |> populate_triggers_for_object!(db_client, any_interface_id, :any_interface)
+      |> populate_triggers_for_object!(
         db_client,
-        %InterfaceDescriptor{type: :properties, ownership: :server} = interface_descriptor
-      ) do
+        device_and_any_interface_object_id,
+        :device_and_any_interface
+      )
+      |> populate_group_device_triggers!(db_client)
+      |> populate_group_and_any_interface_triggers!(db_client)
+    else
+      state
+    end
+  end
+
+  defp populate_group_device_triggers!(state, db_client) do
+    Enum.map(state.groups, &SimpleTriggersProtobufUtils.get_group_object_id/1)
+    |> Enum.reduce(state, &populate_triggers_for_object!(&2, db_client, &1, :group))
+  end
+
+  defp populate_group_and_any_interface_triggers!(state, db_client) do
+    Enum.map(state.groups, &SimpleTriggersProtobufUtils.get_group_and_any_interface_object_id/1)
+    |> Enum.reduce(
+      state,
+      &populate_triggers_for_object!(&2, db_client, &1, :group_and_any_interface)
+    )
+  end
+
+  defp purge_expired_interfaces(state, timestamp) do
+    expired =
+      Enum.take_while(state.interfaces_by_expiry, fn {expiry, _interface} ->
+        expiry <= timestamp
+      end)
+
+    new_interfaces_by_expiry = Enum.drop(state.interfaces_by_expiry, length(expired))
+
+    interfaces_to_drop_list =
+      for {_exp, iface} <- expired do
+        iface
+      end
+
+    state
+    |> forget_interfaces(interfaces_to_drop_list)
+    |> Map.put(:interfaces_by_expiry, new_interfaces_by_expiry)
+  end
+
+  defp forget_any_interface_data_triggers(state) do
+    updated_data_triggers =
+      for {{_type, iface_id, _endpoint} = key, value} <- state.data_triggers,
+          iface_id != :any_interface,
+          into: %{} do
+        {key, value}
+      end
+
+    %{state | data_triggers: updated_data_triggers}
+  end
+
+  defp forget_interfaces(state, interfaces_to_drop) do
+    iface_ids_to_drop =
+      Enum.filter(interfaces_to_drop, &Map.has_key?(state.interfaces, &1))
+      |> Enum.map(fn iface ->
+        Map.fetch!(state.interfaces, iface).interface_id
+      end)
+
+    updated_triggers =
+      Enum.reduce(iface_ids_to_drop, state.data_triggers, fn interface_id, data_triggers ->
+        Enum.reject(data_triggers, fn {{_event_type, iface_id, _endpoint}, _val} ->
+          iface_id == interface_id
+        end)
+        |> Enum.into(%{})
+      end)
+
+    updated_mappings =
+      Enum.reduce(iface_ids_to_drop, state.mappings, fn interface_id, mappings ->
+        Enum.reject(mappings, fn {_endpoint_id, mapping} ->
+          mapping.interface_id == interface_id
+        end)
+        |> Enum.into(%{})
+      end)
+
+    updated_ids =
+      Enum.reduce(iface_ids_to_drop, state.interface_ids_to_name, fn interface_id, ids ->
+        Map.delete(ids, interface_id)
+      end)
+
+    updated_interfaces =
+      Enum.reduce(interfaces_to_drop, state.interfaces, fn iface, ifaces ->
+        Map.delete(ifaces, iface)
+      end)
+
+    %{
+      state
+      | interfaces: updated_interfaces,
+        interface_ids_to_name: updated_ids,
+        mappings: updated_mappings,
+        data_triggers: updated_triggers
+    }
+  end
+
+  defp device_trigger_to_key(event_type, proto_buf_device_trigger) do
+    case event_type do
+      :on_interface_added ->
+        {event_type, introspection_trigger_interface(proto_buf_device_trigger)}
+
+      :on_interface_removed ->
+        {event_type, introspection_trigger_interface(proto_buf_device_trigger)}
+
+      :on_interface_minor_updated ->
+        {event_type, introspection_trigger_interface(proto_buf_device_trigger)}
+
+      # other device triggers do not care about interfaces
+      _ ->
+        event_type
+    end
+  end
+
+  defp introspection_trigger_interface(%ProtobufDeviceTrigger{
+         interface_name: interface_name,
+         interface_major: interface_major
+       }) do
+    SimpleTriggersProtobufUtils.get_interface_id_or_any(interface_name, interface_major)
+  end
+
+  defp get_on_data_triggers(state, event, interface_id, endpoint_id) do
+    key = {event, interface_id, endpoint_id}
+
+    Map.get(state.data_triggers, key, [])
+  end
+
+  defp get_on_data_triggers(state, event, interface_id, endpoint_id, path, value \\ nil) do
+    key = {event, interface_id, endpoint_id}
+
+    candidate_triggers = Map.get(state.data_triggers, key, nil)
+
+    if candidate_triggers do
+      ["" | path_tokens] = String.split(path, "/")
+
+      for trigger <- candidate_triggers,
+          path_matches?(path_tokens, trigger.path_match_tokens) and
+            ValueMatchOperators.value_matches?(
+              value,
+              trigger.value_match_operator,
+              trigger.known_value
+            ) do
+        trigger
+      end
+    else
+      []
+    end
+  end
+
+  # TODO: consider what we should to with the cached policy if/when we allow updating a policy
+  defp maybe_cache_trigger_policy(state, %AMQPTriggerTarget{parent_trigger_id: parent_trigger_id}) do
+    %State{realm: realm_name, trigger_id_to_policy_name: trigger_id_to_policy_name} = state
+
+    case PolicyQueries.retrieve_policy_name(
+           realm_name,
+           parent_trigger_id
+         ) do
+      {:ok, policy_name} ->
+        next_trigger_id_to_policy_name =
+          Map.put(trigger_id_to_policy_name, parent_trigger_id, policy_name)
+
+        %{state | trigger_id_to_policy_name: next_trigger_id_to_policy_name}
+
+      # @default policy is not installed, so here are triggers without policy
+      {:error, :policy_not_found} ->
+        state
+    end
+  end
+
+  defp check_object_aggregation_prefix(path, guessed_endpoints, mappings) do
+    received_path_depth = path_or_endpoint_depth(path)
+
+    Enum.reduce_while(guessed_endpoints, :ok, fn
+      endpoint_id, _acc ->
+        with {:ok, %Mapping{endpoint: endpoint}} <- Map.fetch(mappings, endpoint_id),
+             endpoint_depth when received_path_depth == endpoint_depth - 1 <-
+               path_or_endpoint_depth(endpoint) do
+          {:cont, :ok}
+        else
+          _ ->
+            {:halt, {:error, :invalid_object_aggregation_path}}
+        end
+    end)
+  end
+
+  defp path_or_endpoint_depth(path) when is_binary(path) do
+    String.split(path, "/", trim: true)
+    |> length()
+  end
+
+  defp each_interface_mapping(mappings, interface_descriptor, fun) do
+    Enum.each(mappings, fn {_endpoint_id, mapping} ->
+      if mapping.interface_id == interface_descriptor.interface_id do
+        fun.(mapping)
+      end
+    end)
+  end
+
+  defp reduce_interface_mapping(mappings, interface_descriptor, initial_acc, fun) do
+    Enum.reduce(mappings, initial_acc, fn {_endpoint_id, mapping}, acc ->
+      if mapping.interface_id == interface_descriptor.interface_id do
+        fun.(mapping, acc)
+      else
+        acc
+      end
+    end)
+  end
+
+  defp gather_interface_properties(
+         %State{device_id: device_id, mappings: mappings} = _state,
+         db_client,
+         %InterfaceDescriptor{type: :properties, ownership: :server} = interface_descriptor
+       ) do
+    reduce_interface_mapping(mappings, interface_descriptor, [], fn mapping, i_acc ->
+      Queries.retrieve_endpoint_values(db_client, device_id, interface_descriptor, mapping)
+      |> Enum.reduce(i_acc, fn [{:path, path}, {_, _value}], acc ->
+        ["#{interface_descriptor.name}#{path}" | acc]
+      end)
+    end)
+  end
+
+  defp gather_interface_properties(_state, _db, %InterfaceDescriptor{} = _descriptor) do
+    []
+  end
+
+  defp resend_all_interface_properties(
+         %State{realm: realm, device_id: device_id, mappings: mappings} = _state,
+         db_client,
+         %InterfaceDescriptor{type: :properties, ownership: :server} = interface_descriptor
+       ) do
     encoded_device_id = Device.encode_device_id(device_id)
 
     each_interface_mapping(mappings, interface_descriptor, fn mapping ->
@@ -1601,11 +1620,11 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl.Core do
     end)
   end
 
-  def resend_all_interface_properties(_state, _db, %InterfaceDescriptor{} = _descriptor) do
+  defp resend_all_interface_properties(_state, _db, %InterfaceDescriptor{} = _descriptor) do
     :ok
   end
 
-  def send_consumer_properties_payload(realm, device_id, abs_paths_list) do
+  defp send_consumer_properties_payload(realm, device_id, abs_paths_list) do
     topic = "#{realm}/#{Device.encode_device_id(device_id)}/control/consumer/properties"
 
     uncompressed_payload = Enum.join(abs_paths_list, ";")
@@ -1635,7 +1654,7 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl.Core do
     end
   end
 
-  def send_value(realm, device_id_string, interface_name, path, value) do
+  defp send_value(realm, device_id_string, interface_name, path, value) do
     topic = "#{realm}/#{device_id_string}/#{interface_name}#{path}"
     encapsulated_value = %{v: value}
 
