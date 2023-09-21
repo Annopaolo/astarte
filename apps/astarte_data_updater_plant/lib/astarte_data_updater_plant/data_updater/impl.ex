@@ -33,6 +33,7 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
   alias Astarte.DataUpdaterPlant.MessageTracker
   alias Astarte.DataUpdaterPlant.TriggersHandler
   alias Astarte.DataUpdaterPlant.DataUpdater.Impl.Core
+  alias Astarte.DataUpdaterPlant.DataUpdater.Core.ProcessIntrospection
   require Logger
 
   @paths_cache_size 32
@@ -722,9 +723,124 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
 
   def handle_introspection(state, payload, message_id, timestamp) do
     with {:ok, new_introspection_list} <- PayloadsDecoder.parse_introspection(payload) do
-      Core.process_introspection(state, new_introspection_list, payload, message_id, timestamp)
+      {:ok, db_client} = Database.connect(realm: state.realm)
+
+      state = Core.execute_time_based_actions(state, timestamp, db_client)
+
+      timestamp_ms = div(timestamp, 10_000)
+
+      process_introspection = %ProcessIntrospection{
+        realm: state.realm,
+        device_id: state.device_id,
+        encoded_device_id: Device.encode_device_id(state.device_id),
+        introspection: state.introspection,
+        interfaces: state.interfaces,
+        trigger_id_to_policy_name: state.trigger_id_to_policy_name,
+        timestamp_ms: timestamp_ms
+      }
+
+      {new_introspection_map, new_introspection_minor_map} =
+        ProcessIntrospection.introspection_list_to_major_and_minor_maps(new_introspection_list)
+
+      any_interface_id = SimpleTriggersProtobufUtils.any_interface_object_id()
+
+      %{device_triggers: device_triggers} =
+        Core.populate_triggers_for_object!(state, db_client, any_interface_id, :any_interface)
+
+      ProcessIntrospection.handle_incoming_introspection(
+        process_introspection,
+        payload,
+        device_triggers
+      )
+
+      # TODO: implement here object_id handling for a certain interface name. idea: introduce interface_family_id
+
+      introspection_changes =
+        ProcessIntrospection.compute_introspection_changes(
+          state.introspection,
+          new_introspection_map
+        )
+
+      Enum.each(introspection_changes, fn {change_type, changed_interfaces} ->
+        case change_type do
+          :ins ->
+            ProcessIntrospection.handle_added_interfaces(
+              process_introspection,
+              db_client,
+              changed_interfaces,
+              new_introspection_minor_map,
+              device_triggers
+            )
+
+          :del ->
+            Logger.debug(
+              "Removing interfaces from introspection: #{inspect(changed_interfaces)}."
+            )
+
+            ProcessIntrospection.handle_removed_interfaces(
+              process_introspection,
+              db_client,
+              changed_interfaces,
+              device_triggers
+            )
+
+          :eq ->
+            Logger.debug("#{inspect(changed_interfaces)} are already on device introspection.")
+        end
+      end)
+
+      {:ok, old_minors} = Queries.fetch_device_introspection_minors(db_client, state.device_id)
+
+      {added_interfaces, removed_interfaces} =
+        ProcessIntrospection.updated_interfaces_from_changes(introspection_changes)
+
+      ProcessIntrospection.update_device_old_introspection(
+        process_introspection,
+        db_client,
+        added_interfaces,
+        removed_interfaces,
+        old_minors
+      )
+
+      # Deliver interface_minor_updated triggers if needed
+      ProcessIntrospection.handle_interface_minor_updated(
+        process_introspection,
+        new_introspection_map,
+        new_introspection_minor_map,
+        old_minors,
+        device_triggers
+      )
+
+      # Removed/updated interfaces must be purged away, otherwise data will be written using old
+      # interface_id.
+      interfaces_to_drop_list =
+        ProcessIntrospection.compute_interfaces_to_drop(state.interfaces, removed_interfaces)
+
+      # drop_interfaces wants a list of already loaded interfaces, otherwise it will crash
+      new_state = Core.drop_interfaces(state, interfaces_to_drop_list)
+
+      Queries.update_device_introspection!(
+        db_client,
+        new_state.device_id,
+        new_introspection_map,
+        new_introspection_minor_map
+      )
+
+      MessageTracker.ack_delivery(new_state.message_tracker, message_id)
+
+      :telemetry.execute(
+        [:astarte, :data_updater_plant, :data_updater, :processed_introspection],
+        %{},
+        %{realm: new_state.realm}
+      )
+
+      new_state
+      |> Core.update_introspection(new_introspection_map)
+      |> Core.init_paths_cache()
+      |> Core.add_received_message(payload)
     else
       {:error, :invalid_introspection} ->
+        # TODO: move this in one function (or more) factoring out relevant context
         Logger.warn("Discarding invalid introspection: #{inspect(payload)}.",
           tag: "invalid_introspection"
         )

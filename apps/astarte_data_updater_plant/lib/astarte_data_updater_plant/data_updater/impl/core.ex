@@ -433,398 +433,6 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl.Core do
     |> update_interface_stats(interface, major, path, payload)
   end
 
-  defp introspection_list_to_db_introspection_maps(introspection_list) do
-    # TODO use `for reduce` when it will be available: https://elixirforum.com/t/introducing-for-let-and-for-reduce/44773
-    Enum.reduce(introspection_list, {%{}, %{}}, fn {interface, major, minor},
-                                                   {introspection_map, introspection_minor_map} ->
-      introspection_map = Map.put(introspection_map, interface, major)
-      introspection_minor_map = Map.put(introspection_minor_map, interface, minor)
-
-      {introspection_map, introspection_minor_map}
-    end)
-  end
-
-  defp handle_incoming_introspection(
-         realm,
-         encoded_device_id,
-         trigger_id_to_policy_name,
-         payload,
-         timestamp_ms,
-         device_triggers
-       ) do
-    on_introspection_target_with_policy_list =
-      Map.get(device_triggers, :on_incoming_introspection, [])
-      |> Enum.map(&policy_and_target_from_target(trigger_id_to_policy_name, &1))
-
-    TriggersHandler.incoming_introspection(
-      on_introspection_target_with_policy_list,
-      realm,
-      encoded_device_id,
-      payload,
-      timestamp_ms
-    )
-  end
-
-  defp handle_added_interfaces(
-         realm,
-         encoded_device_id,
-         added_interfaces,
-         db_client,
-         trigger_id_to_policy_name,
-         db_introspection_minor_map,
-         device_triggers,
-         timestamp_ms
-       ) do
-    Logger.debug("Adding interfaces to introspection: #{inspect(added_interfaces)}.")
-
-    Enum.each(added_interfaces, fn {interface_name, interface_major} ->
-      handle_added_interface(
-        realm,
-        encoded_device_id,
-        db_client,
-        trigger_id_to_policy_name,
-        interface_name,
-        interface_major,
-        db_introspection_minor_map,
-        device_triggers,
-        timestamp_ms
-      )
-    end)
-  end
-
-  defp handle_added_interface(
-         realm,
-         encoded_device_id,
-         db_client,
-         trigger_id_to_policy_name,
-         interface_name,
-         interface_major,
-         db_introspection_minor_map,
-         device_triggers,
-         timestamp_ms
-       ) do
-    :ok =
-      maybe_register_device_with_interface(
-        db_client,
-        encoded_device_id,
-        interface_name,
-        interface_major
-      )
-
-    minor = Map.get(db_introspection_minor_map, interface_name)
-
-    interface_id = CQLUtils.interface_id(interface_name, interface_major)
-
-    interface_added_target =
-      Map.get(device_triggers, {:on_interface_added, interface_id}, []) ++
-        Map.get(device_triggers, {:on_interface_added, :any_interface}, [])
-
-    interface_added_target_with_policy_list =
-      Enum.map(
-        interface_added_target,
-        &policy_and_target_from_target(trigger_id_to_policy_name, &1)
-      )
-
-    TriggersHandler.interface_added(
-      interface_added_target_with_policy_list,
-      realm,
-      encoded_device_id,
-      interface_name,
-      interface_major,
-      minor,
-      timestamp_ms
-    )
-  end
-
-  defp maybe_register_device_with_interface(db_client, encoded_device_id, interface_name, 0) do
-    Queries.register_device_with_interface(
-      db_client,
-      encoded_device_id,
-      interface_name,
-      0
-    )
-  end
-
-  defp maybe_register_device_with_interface(
-         _db_client,
-         _device_id,
-         _interface_name,
-         _interface_major
-       ) do
-    :ok
-  end
-
-  defp handle_removed_interfaces(
-         removed_interfaces,
-         state,
-         db_client,
-         device_triggers,
-         timestamp_ms
-       ) do
-    realm = state.realm
-    encoded_device_id = Device.encode_device_id(state.device_id)
-    Logger.debug("Adding interfaces to introspection: #{inspect(removed_interfaces)}.")
-
-    Enum.each(removed_interfaces, fn {interface_name, interface_major} ->
-      handle_removed_interface(
-        db_client,
-        state,
-        realm,
-        encoded_device_id,
-        interface_name,
-        interface_major,
-        device_triggers,
-        timestamp_ms
-      )
-    end)
-  end
-
-  defp handle_removed_interface(
-         db_client,
-         state,
-         realm,
-         encoded_device_id,
-         interface_name,
-         interface_major,
-         device_triggers,
-         timestamp_ms
-       ) do
-    :ok =
-      maybe_unregister_device_with_interface(
-        db_client,
-        encoded_device_id,
-        interface_name,
-        interface_major
-      )
-
-    interface_id = CQLUtils.interface_id(interface_name, interface_major)
-
-    interface_removed_target =
-      Map.get(device_triggers, {:on_interface_removed, interface_id}, []) ++
-        Map.get(device_triggers, {:on_interface_removed, :any_interface}, [])
-
-    interface_removed_target_with_policy_list =
-      Enum.map(interface_removed_target, &policy_and_target_from_target(state, &1))
-
-    TriggersHandler.interface_removed(
-      interface_removed_target_with_policy_list,
-      realm,
-      encoded_device_id,
-      interface_name,
-      interface_major,
-      timestamp_ms
-    )
-  end
-
-  defp maybe_unregister_device_with_interface(db_client, encoded_device_id, interface_name, 0) do
-    Queries.register_device_with_interface(
-      db_client,
-      encoded_device_id,
-      interface_name,
-      0
-    )
-  end
-
-  defp maybe_unregister_device_with_interface(
-         _db_client,
-         _device_id,
-         _interface_name,
-         _interface_major
-       ) do
-    :ok
-  end
-
-  defp update_device_old_introspection(db_client, state, introspection_diff, old_minors) do
-    {added_interfaces, removed_interfaces} =
-      Enum.reduce(introspection_diff, {%{}, %{}}, fn {change_type, changed_interfaces},
-                                                     {add_acc, rm_acc} ->
-        case change_type do
-          :ins ->
-            changed_map = Enum.into(changed_interfaces, %{})
-            {Map.merge(add_acc, changed_map), rm_acc}
-
-          :del ->
-            changed_map = Enum.into(changed_interfaces, %{})
-            {add_acc, Map.merge(rm_acc, changed_map)}
-
-          :eq ->
-            {add_acc, rm_acc}
-        end
-      end)
-
-    readded_introspection = Enum.to_list(added_interfaces)
-
-    old_introspection =
-      Enum.reduce(removed_interfaces, %{}, fn {iface, _major}, acc ->
-        prev_major = Map.fetch!(state.introspection, iface)
-        prev_minor = Map.get(old_minors, iface, 0)
-        Map.put(acc, {iface, prev_major}, prev_minor)
-      end)
-
-    :ok = Queries.add_old_interfaces(db_client, state.device_id, old_introspection)
-    :ok = Queries.remove_old_interfaces(db_client, state.device_id, readded_introspection)
-    {added_interfaces, removed_interfaces}
-  end
-
-  defp handle_interface_minor_updated(
-         state,
-         db_introspection_map,
-         db_introspection_minor_map,
-         old_minors,
-         device_triggers,
-         timestamp_ms
-       ) do
-    realm = state.realm
-    encoded_device_id = Device.encode_device_id(state.device_id)
-
-    # Deliver interface_minor_updated triggers if needed
-    for {interface_name, old_minor} <- old_minors,
-        interface_major = Map.fetch!(state.introspection, interface_name),
-        Map.get(db_introspection_map, interface_name) == interface_major,
-        new_minor = Map.get(db_introspection_minor_map, interface_name),
-        new_minor != old_minor do
-      interface_id = CQLUtils.interface_id(interface_name, interface_major)
-
-      interface_minor_updated_target_with_policy_list =
-        Map.get(device_triggers, {:on_interface_minor_updated, interface_id}, [])
-        |> Enum.map(&policy_and_target_from_target(state, &1))
-
-      TriggersHandler.interface_minor_updated(
-        interface_minor_updated_target_with_policy_list,
-        realm,
-        encoded_device_id,
-        interface_name,
-        interface_major,
-        old_minor,
-        new_minor,
-        timestamp_ms
-      )
-    end
-  end
-
-  # TODO split this in a number of functions
-  def process_introspection(state, new_introspection_list, payload, message_id, timestamp) do
-    {:ok, db_client} = Database.connect(realm: state.realm)
-    encoded_device_id = Device.encode_device_id(state.device_id)
-
-    # TODO call this `state`
-    new_state = execute_time_based_actions(state, timestamp, db_client)
-
-    timestamp_ms = div(timestamp, 10_000)
-
-    %State{
-      realm: realm,
-      device_id: device_id,
-      introspection: introspection,
-      interfaces: interfaces,
-      trigger_id_to_policy_name: trigger_id_to_policy_name
-    } = new_state
-
-    # TODO call this `new_introspection_map` and `new_introspection_minor_map`
-    {db_introspection_map, db_introspection_minor_map} =
-      introspection_list_to_db_introspection_maps(new_introspection_list)
-
-    any_interface_id = SimpleTriggersProtobufUtils.any_interface_object_id()
-
-    %{device_triggers: device_triggers} =
-      populate_triggers_for_object!(new_state, db_client, any_interface_id, :any_interface)
-
-    handle_incoming_introspection(
-      realm,
-      encoded_device_id,
-      trigger_id_to_policy_name,
-      payload,
-      timestamp_ms,
-      device_triggers
-    )
-
-    # TODO: implement here object_id handling for a certain interface name. idea: introduce interface_family_id
-
-    current_sorted_introspection_list = Enum.sort(introspection)
-
-    new_sorted_introspection_list = Enum.sort(db_introspection_map)
-
-    diff = List.myers_difference(current_sorted_introspection_list, new_sorted_introspection_list)
-
-    Enum.each(diff, fn {change_type, changed_interfaces} ->
-      case change_type do
-        :ins ->
-          handle_added_interfaces(
-            realm,
-            encoded_device_id,
-            changed_interfaces,
-            db_client,
-            trigger_id_to_policy_name,
-            db_introspection_minor_map,
-            device_triggers,
-            timestamp_ms
-          )
-
-        :del ->
-          Logger.debug("Removing interfaces from introspection: #{inspect(changed_interfaces)}.")
-
-          handle_removed_interfaces(
-            changed_interfaces,
-            new_state,
-            db_client,
-            device_triggers,
-            timestamp_ms
-          )
-
-        :eq ->
-          Logger.debug("#{inspect(changed_interfaces)} are already on device introspection.")
-      end
-    end)
-
-    {:ok, old_minors} = Queries.fetch_device_introspection_minors(db_client, device_id)
-
-    {_added_interfaces, removed_interfaces} =
-      update_device_old_introspection(db_client, new_state, diff, old_minors)
-
-    # Deliver interface_minor_updated triggers if needed
-    handle_interface_minor_updated(
-      new_state,
-      db_introspection_map,
-      db_introspection_minor_map,
-      old_minors,
-      device_triggers,
-      timestamp_ms
-    )
-
-    # Removed/updated interfaces must be purged away, otherwise data will be written using old
-    # interface_id.
-    remove_interfaces_list = Map.keys(removed_interfaces)
-
-    {interfaces_to_drop_map, _} = Map.split(interfaces, remove_interfaces_list)
-    interfaces_to_drop_list = Map.keys(interfaces_to_drop_map)
-
-    # Forget interfaces wants a list of already loaded interfaces, otherwise it will crash
-    new_state = forget_interfaces(new_state, interfaces_to_drop_list)
-
-    Queries.update_device_introspection!(
-      db_client,
-      new_state.device_id,
-      db_introspection_map,
-      db_introspection_minor_map
-    )
-
-    MessageTracker.ack_delivery(new_state.message_tracker, message_id)
-
-    :telemetry.execute(
-      [:astarte, :data_updater_plant, :data_updater, :processed_introspection],
-      %{},
-      %{realm: realm}
-    )
-
-    %{
-      new_state
-      | introspection: db_introspection_map,
-        paths_cache: Cache.new(@paths_cache_size),
-        total_received_msgs: new_state.total_received_msgs + 1,
-        total_received_bytes: new_state.total_received_bytes + byte_size(payload)
-    }
-  end
-
   def delete_volatile_trigger(
         state,
         {obj_id, _obj_type},
@@ -1585,7 +1193,7 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl.Core do
       end
 
     state
-    |> forget_interfaces(interfaces_to_drop_list)
+    |> drop_interfaces(interfaces_to_drop_list)
     |> Map.put(:interfaces_by_expiry, new_interfaces_by_expiry)
   end
 
@@ -1600,7 +1208,7 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl.Core do
     %{state | data_triggers: updated_data_triggers}
   end
 
-  defp forget_interfaces(state, interfaces_to_drop) do
+  def drop_interfaces(state, interfaces_to_drop) do
     iface_ids_to_drop =
       Enum.filter(interfaces_to_drop, &Map.has_key?(state.interfaces, &1))
       |> Enum.map(fn iface ->
@@ -1853,5 +1461,27 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl.Core do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  def update_introspection(state, new_introspection) do
+    %{state | introspection: new_introspection}
+  end
+
+  def init_paths_cache(state) do
+    %{state | paths_cache: Cache.new(@paths_cache_size)}
+  end
+
+  def increment_total_received_messages(state) do
+    %{state | total_received_msgs: state.total_received_msgs + 1}
+  end
+
+  def increment_total_received_bytes(state, byte_size) do
+    %{state | total_received_bytes: state.total_received_bytes + byte_size}
+  end
+
+  def add_received_message(state, payload) do
+    state
+    |> increment_total_received_messages()
+    |> increment_total_received_bytes(byte_size(payload))
   end
 end
