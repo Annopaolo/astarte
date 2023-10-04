@@ -31,11 +31,13 @@ defmodule Astarte.Housekeeping.API.RPC.Housekeeping do
     GetRealmReply,
     GetRealmsList,
     GetRealmsListReply,
-    Reply
+    Reply,
+    UpdateRealm
   }
 
   alias Astarte.Housekeeping.API.Config
   alias Astarte.Housekeeping.API.Realms.Realm
+  alias Astarte.Housekeeping.API.Realms.RealmUpdate
 
   @rpc_client Config.rpc_client!()
   @destination Astarte.RPC.Protocol.Housekeeping.amqp_queue()
@@ -79,6 +81,26 @@ defmodule Astarte.Housekeeping.API.RPC.Housekeeping do
       datacenter_replication_factors: Enum.to_list(replication_factors_map)
     }
     |> encode_call(:create_realm)
+    |> @rpc_client.rpc_call(@destination)
+    |> decode_reply()
+    |> extract_reply()
+  end
+
+  def update_realm(%RealmUpdate{
+        realm_name: realm_name,
+        jwt_public_key_pem: pem,
+        replication_class: replication_class,
+        datacenter_replication_factors: replication_factors_map,
+        device_registration_limit: device_registration_limit
+      }) do
+    %UpdateRealm{
+      realm_name: realm_name,
+      jwt_public_key_pem: pem,
+      replication_class: replication_class,
+      datacenter_replication_factors: replication_factors_map,
+      device_registration_limit: device_registration_limit
+    }
+    |> encode_call(:update_realm)
     |> @rpc_client.rpc_call(@destination)
     |> decode_reply()
     |> extract_reply()

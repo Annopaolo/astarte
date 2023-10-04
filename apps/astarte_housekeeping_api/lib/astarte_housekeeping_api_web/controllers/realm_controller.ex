@@ -52,9 +52,8 @@ defmodule Astarte.Housekeeping.APIWeb.RealmController do
     end
   end
 
-  def update(conn, %{"id" => id, "data" => realm_params}) do
-    with {:ok, %Realm{} = realm} <- Realms.get_realm(id),
-         {:ok, %Realm{} = realm} <- Realms.update_realm(realm, realm_params) do
+  def update(conn, %{"data" => realm_params}) do
+    with {:ok, %Realm{} = realm} <- Realms.update_realm(realm_params) do
       render(conn, "show.json", realm: realm)
     end
   end

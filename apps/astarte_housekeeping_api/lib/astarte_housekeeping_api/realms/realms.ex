@@ -21,6 +21,7 @@ defmodule Astarte.Housekeeping.API.Realms do
   The boundary for the Realms system.
   """
 
+  alias Astarte.Housekeeping.API.Realms.RealmUpdate
   alias Astarte.Housekeeping.API.Realms.Realm
   alias Astarte.Housekeeping.API.RPC.Housekeeping
 
@@ -88,8 +89,17 @@ defmodule Astarte.Housekeeping.API.Realms do
       {:error, ...}
 
   """
-  def update_realm(%Realm{} = _realm, _attrs) do
-    raise "TODO"
+  def update_realm(attrs) do
+    # TODO: specify that attrs is never empty because there's at least realm_name
+    changeset = %RealmUpdate{} |> RealmUpdate.changeset(attrs)
+
+    with {:ok, %RealmUpdate{} = realm_update} <- Ecto.Changeset.apply_action(changeset, :insert) do
+      # TODO remove `case`
+      case Housekeeping.update_realm(realm_update) do
+        {:ok, realm} -> {:ok, realm}
+        {:error, reason} -> {:error, reason}
+      end
+    end
   end
 
   @doc """
