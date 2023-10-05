@@ -268,6 +268,7 @@ components:
             VwIDAQAB
             -----END PUBLIC KEY-----
           description: "PEM-encoded public key of the realm."
+        # TODO complete: we also allow to specify the `replication_class` (one of "SimpleStrategy" and "NetworkTopologyStrategy")
         replication_factor:
           type: integer
           example: 2
@@ -293,6 +294,7 @@ components:
             VwIDAQAB
             -----END PUBLIC KEY-----
           description: "PEM-encoded public key of the realm."
+        # TODO complete: we also allow to specify the `replication_class` (one of "SimpleStrategy" and "NetworkTopologyStrategy")
         replication_factor:
           type: integer
           example: 2
