@@ -83,4 +83,58 @@ defmodule Astarte.Housekeeping.Engine do
   def list_realms do
     Queries.list_realms()
   end
+
+  def update_realm(realm_name, update_status) do
+    # TODO: what should we do with replication and replication factors?
+    # Peraphs fail if they're missing, saying that updating them is
+    # not supported?
+
+    %{
+      jwt_public_key_pem: new_jwt_public_key_pem,
+      device_registration_limit: new_device_registration_limit
+    } = update_status
+
+    with {:ok, realm} <- Queries.get_realm(realm_name),
+         :ok <- update_jwt_public_key_pem(realm_name, new_jwt_public_key_pem),
+         :ok <- update_device_registration_limit(realm_name, new_device_registration_limit) do
+      updated_realm =
+        realm
+        |> Map.put(:jwt_public_key_pem, new_jwt_public_key_pem)
+        |> Map.put(:device_registration_limit, new_device_registration_limit)
+
+      {:ok, updated_realm}
+    end
+  end
+
+  defp update_jwt_public_key_pem(realm_name, new_jwt_public_key_pem) do
+    case Queries.update_jwt_public_key_pem(realm_name, new_jwt_public_key_pem) do
+      {:ok, %Xandra.Void{}} ->
+        :ok
+
+      {:error, reason} ->
+        _ =
+          Logger.warn(
+            "Cannot update JWT public key for realm #{realm_name}, error #{inspect(reason)}",
+            tag: "update_public_key_fail"
+          )
+
+        {:error, :update_public_key_fail}
+    end
+  end
+
+  defp update_device_registration_limit(realm_name, new_device_registration_limit) do
+    case Queries.update_device_registration_limit(realm_name, new_device_registration_limit) do
+      {:ok, %Xandra.Void{}} ->
+        :ok
+
+      {:error, reason} ->
+        _ =
+          Logger.warn(
+            "Cannot update device registration limit for realm #{realm_name}, error #{inspect(reason)}",
+            tag: "update_device_registration_limit_fail"
+          )
+
+        {:error, :update_device_registration_limit_fail}
+    end
+  end
 end

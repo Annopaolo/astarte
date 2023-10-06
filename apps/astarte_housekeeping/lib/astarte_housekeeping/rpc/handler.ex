@@ -35,7 +35,8 @@ defmodule Astarte.Housekeeping.RPC.Handler do
     GetRealmReply,
     GetRealmsList,
     GetRealmsListReply,
-    Reply
+    Reply,
+    UpdateRealm
   }
 
   require Logger
@@ -227,6 +228,47 @@ defmodule Astarte.Housekeeping.RPC.Handler do
 
   defp call_rpc({:get_realm, %GetRealm{realm_name: realm_name}}) do
     case Astarte.Housekeeping.Engine.get_realm(realm_name) do
+      %{
+        realm_name: realm_name_reply,
+        jwt_public_key_pem: public_key,
+        replication_class: "SimpleStrategy",
+        replication_factor: replication_factor
+      } ->
+        %GetRealmReply{
+          realm_name: realm_name_reply,
+          jwt_public_key_pem: public_key,
+          replication_class: :SIMPLE_STRATEGY,
+          replication_factor: replication_factor
+        }
+        |> encode_reply(:get_realm_reply)
+        |> ok_wrap
+
+      %{
+        realm_name: realm_name_reply,
+        jwt_public_key_pem: public_key,
+        replication_class: "NetworkTopologyStrategy",
+        datacenter_replication_factors: datacenter_replication_factors
+      } ->
+        datacenter_replication_factors_list = Enum.into(datacenter_replication_factors, [])
+
+        %GetRealmReply{
+          realm_name: realm_name_reply,
+          jwt_public_key_pem: public_key,
+          replication_class: :NETWORK_TOPOLOGY_STRATEGY,
+          datacenter_replication_factors: datacenter_replication_factors_list
+        }
+        |> encode_reply(:get_realm_reply)
+        |> ok_wrap
+
+      {:error, reason} ->
+        generic_error(reason)
+    end
+  end
+
+  defp call_rpc({:update_realm, %UpdateRealm{} = call}) do
+    %UpdateRealm{realm_name: realm_name} = call
+
+    case Astarte.Housekeeping.Engine.update_realm(realm_name, call) do
       %{
         realm_name: realm_name_reply,
         jwt_public_key_pem: public_key,

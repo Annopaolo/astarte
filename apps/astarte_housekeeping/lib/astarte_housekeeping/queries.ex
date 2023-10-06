@@ -55,6 +55,30 @@ defmodule Astarte.Housekeeping.Queries do
     end
   end
 
+  @spec update_jwt_public_key_pem(String.t(), String.t()) ::
+          {:ok, Xandra.Void.t()}
+          | {:error, :database_connection_error}
+          | {:error, :database_error}
+  def update_jwt_public_key_pem(realm_name, new_jwt_public_key_pem) do
+    with :ok <- validate_realm_name(realm_name) do
+      Xandra.Cluster.run(:xandra, fn conn ->
+        update_public_key(conn, realm_name, new_jwt_public_key_pem)
+      end)
+    end
+  end
+
+  @spec update_device_registration_limit(String.t(), String.t()) ::
+          {:ok, Xandra.Void.t()}
+          | {:error, :database_connection_error}
+          | {:error, :database_error}
+  def update_device_registration_limit(realm_name, new_device_registration_limit) do
+    with :ok <- validate_realm_name(realm_name) do
+      Xandra.Cluster.run(:xandra, fn conn ->
+        update_device_registration_limit(conn, realm_name, new_device_registration_limit)
+      end)
+    end
+  end
+
   defp build_replication_map_str(replication_factor)
        when is_integer(replication_factor) and replication_factor > 0 do
     replication_map_str =
@@ -1035,6 +1059,72 @@ defmodule Astarte.Housekeeping.Queries do
           )
 
         {:error, reason}
+    end
+  end
+
+  defp update_public_key(conn, realm_name, new_public_key) do
+    statement = """
+    INSERT INTO :realm_name.kv_store (group, key, value)
+    VALUES('auth','jwt_public_key_pem', varcharAsBlob(:new_public_key))
+    """
+
+    # TODO move away from this when NoaccOS' PR is merged
+    query = String.replace(statement, ":realm_name", realm_name)
+    # TODO check error case here
+    with {:ok, prepared} <- Xandra.prepare(conn, query) do
+      case Xandra.execute(conn, prepared, %{:new_public_key => new_public_key},
+             consistency: :quorum
+           ) do
+        {:ok, result} ->
+          {:ok, result}
+
+        {:error, %Xandra.Error{} = err} ->
+          _ = Logger.warn("Database error: #{Exception.message(err)}.", tag: "database_error")
+          {:error, :database_error}
+
+        {:error, %Xandra.ConnectionError{} = err} ->
+          _ =
+            Logger.warn("Database connection error: #{Exception.message(err)}.",
+              tag: "database_connection_error"
+            )
+
+          {:error, :database_connection_error}
+      end
+    end
+  end
+
+  defp update_device_registration_limit(conn, realm_name, new_device_registration_limit) do
+    statement = """
+    INSERT INTO astarte.realms (realm_name, device_registration_limit)
+    VALUES(:realm_name, :new_device_registration_limit)
+    """
+
+    # TODO check error case here
+    with {:ok, prepared} <- Xandra.prepare(conn, statement) do
+      case Xandra.execute(
+             conn,
+             prepared,
+             %{
+               :new_device_registration_limit => new_device_registration_limit,
+               realm_name: realm_name
+             },
+             consistency: :quorum
+           ) do
+        {:ok, result} ->
+          {:ok, result}
+
+        {:error, %Xandra.Error{} = err} ->
+          _ = Logger.warn("Database error: #{Exception.message(err)}.", tag: "database_error")
+          {:error, :database_error}
+
+        {:error, %Xandra.ConnectionError{} = err} ->
+          _ =
+            Logger.warn("Database connection error: #{Exception.message(err)}.",
+              tag: "database_connection_error"
+            )
+
+          {:error, :database_connection_error}
+      end
     end
   end
 
