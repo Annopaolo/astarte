@@ -34,6 +34,8 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
   alias Astarte.DataUpdaterPlant.TriggersHandler
   alias Astarte.DataUpdaterPlant.DataUpdater.Impl.Core
   alias Astarte.DataUpdaterPlant.DataUpdater.Core.ProcessIntrospection
+  alias Astarte.DataUpdaterPlant.DataUpdater.Core.Error
+
   require Logger
 
   @paths_cache_size 32
@@ -840,34 +842,20 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
       |> Core.add_received_message(payload)
     else
       {:error, :invalid_introspection} ->
-        # TODO: move this in one function (or more) factoring out relevant context
-        Logger.warn("Discarding invalid introspection: #{inspect(payload)}.",
-          tag: "invalid_introspection"
-        )
-
-        {:ok, new_state} = Core.ask_clean_session(state, timestamp)
-        MessageTracker.discard(new_state.message_tracker, message_id)
-
-        :telemetry.execute(
-          [:astarte, :data_updater_plant, :data_updater, :discarded_introspection],
-          %{},
-          %{realm: new_state.realm}
-        )
-
         base64_payload = Base.encode64(payload)
 
-        error_metadata = %{
-          "base64_payload" => base64_payload
+        error = %Error{
+          state: state,
+          message_id: message_id,
+          timestamp: timestamp,
+          log_line: "Discarding invalid introspection base64: #{base64_payload}.",
+          tag: "invalid_introspection",
+          telemetry_tag: :discarded_introspection,
+          metadata: %{"base64_payload" => base64_payload},
+          state_update_fun: &Core.update_stats(&1, "", nil, "", payload)
         }
 
-        Core.execute_device_error_triggers(
-          new_state,
-          "invalid_introspection",
-          error_metadata,
-          timestamp
-        )
-
-        Core.update_stats(new_state, "", nil, "", payload)
+        Error.ask_clean_session_and_error(error)
     end
   end
 

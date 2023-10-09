@@ -1463,6 +1463,8 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl.Core do
     end
   end
 
+
+  # TODO test from here
   def update_introspection(state, new_introspection) do
     %{state | introspection: new_introspection}
   end
