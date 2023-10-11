@@ -69,7 +69,7 @@ defmodule Astarte.Housekeeping.API.Mixfile do
 
   defp astarte_required_modules(_) do
     [
-      {:astarte_rpc, github: "astarte-platform/astarte_rpc"}
+      {:astarte_rpc, github: "Annopaolo/astarte_rpc", branch: "realm-update"}
     ]
   end
 
