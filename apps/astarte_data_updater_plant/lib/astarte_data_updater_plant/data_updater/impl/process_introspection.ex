@@ -25,30 +25,18 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Core.ProcessIntrospection do
 
   require Logger
 
-  defstruct [
-    :realm,
-    :device_id,
-    :encoded_device_id,
-    :introspection,
-    :interfaces,
-    :trigger_id_to_policy_name,
-    :db_client,
-    :timestamp_ms
-  ]
+  use TypedStruct
 
-  # TODO: enforce keys
-
-  @type t :: %__MODULE__{
-          realm: String.t(),
-          device_id: Device.device_id(),
-          encoded_device_id: Device.encoded_device_id(),
-          introspection: map(),
-          interfaces: map(),
-          trigger_id_to_policy_name: map(),
-          # TODO change to actual type
-          db_client: term(),
-          timestamp_ms: term()
-        }
+  typedstruct do
+    field :realm, String.t()
+    field :device_id, Device.device_id()
+    field :encoded_device_id, Device.encoded_device_id()
+    field :introspection, map()
+    field :interfaces, map()
+    field :trigger_id_to_policy_name, map()
+    field :db_client, term()
+    field :timestamp_ms, DateTime.t()
+  end
 
   @spec handle_incoming_introspection(
           __MODULE__.t(),

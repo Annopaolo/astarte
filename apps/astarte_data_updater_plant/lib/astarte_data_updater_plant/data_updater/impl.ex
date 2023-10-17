@@ -724,7 +724,7 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
   end
 
   def handle_introspection(state, payload, message_id, timestamp) do
-    with {:ok, new_introspection_list} <- PayloadsDecoder.parse_introspection(payload) do
+    with {:ok, new_introspection_list} <- parse_introspection(state, payload, message_id, timestamp)do
       {:ok, db_client} = Database.connect(realm: state.realm)
 
       state = Core.execute_time_based_actions(state, timestamp, db_client)
@@ -840,22 +840,25 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
       |> Core.update_introspection(new_introspection_map)
       |> Core.init_paths_cache()
       |> Core.add_received_message(payload)
-    else
-      {:error, :invalid_introspection} ->
-        base64_payload = Base.encode64(payload)
+    end
+  end
 
-        error = %Error{
-          state: state,
-          message_id: message_id,
-          timestamp: timestamp,
-          log_line: "Discarding invalid introspection base64: #{base64_payload}.",
-          tag: "invalid_introspection",
-          telemetry_tag: :discarded_introspection,
-          metadata: %{"base64_payload" => base64_payload},
-          state_update_fun: &Core.update_stats(&1, "", nil, "", payload)
-        }
+  defp parse_introspection(state, payload, message_id, timestamp) do
+    with {:error, :invalid_introspection} <- PayloadsDecoder.parse_introspection(payload) do
+      base64_payload = Base.encode64(payload)
 
-        Error.ask_clean_session_and_error(error)
+      error = %Error{
+        state: state,
+        message_id: message_id,
+        timestamp: timestamp,
+        log_line: "Discarding invalid introspection base64: #{base64_payload}.",
+        tag: "invalid_introspection",
+        telemetry_tag: :discarded_introspection,
+        metadata: %{"base64_payload" => base64_payload},
+        state_update_fun: &Core.update_stats(&1, "", nil, "", payload)
+      }
+
+      Error.ask_clean_session_and_error(error)
     end
   end
 
