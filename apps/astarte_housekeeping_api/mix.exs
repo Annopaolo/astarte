@@ -69,7 +69,7 @@ defmodule Astarte.Housekeeping.API.Mixfile do
 
   defp astarte_required_modules(_) do
     [
-      {:astarte_rpc, github: "Annopaolo/astarte_rpc", branch: "realm-update"}
+      {:astarte_rpc, github: "Annopaolo/astarte_rpc", branch: "device-registration-limit"}
     ]
   end
 
