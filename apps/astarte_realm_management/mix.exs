@@ -69,7 +69,7 @@ defmodule Astarte.RealmManagement.Mixfile do
     [
       {:astarte_core, github: "astarte-platform/astarte_core", override: true},
       {:astarte_data_access, github: "astarte-platform/astarte_data_access"},
-      {:astarte_rpc, github: "Annopaolo/astarte_rpc", branch: "delete-device"}
+      {:astarte_rpc, github: "Annopaolo/astarte_rpc", branch: "device-registration-limit"}
     ]
   end
 
