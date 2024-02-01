@@ -33,6 +33,9 @@ defmodule Astarte.DataUpdaterPlant.ConsumersSupervisor do
 
     children = [
       {Registry, [keys: :unique, name: Registry.AMQPDataConsumer]},
+      {ExRabbitPool.PoolSupervisor,
+       rabbitmq_config: Config.amqp_consumer_options!(),
+       connection_pools: [Config.amqp_consumer_pool_config!()]},
       {AMQPDataConsumer.ConnectionManager, amqp_opts: Config.amqp_consumer_options!()},
       AMQPDataConsumer.Supervisor
     ]
