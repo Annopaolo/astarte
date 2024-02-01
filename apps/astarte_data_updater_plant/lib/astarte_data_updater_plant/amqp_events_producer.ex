@@ -20,13 +20,10 @@ defmodule Astarte.DataUpdaterPlant.AMQPEventsProducer do
   require Logger
   use GenServer
 
-  alias AMQP.Basic
-  alias AMQP.Channel
-  alias AMQP.Connection
-  alias AMQP.Exchange
   alias Astarte.DataUpdaterPlant.Config
 
   @connection_backoff 10000
+  @adapter Config.amqp_adapter!()
 
   # API
 
@@ -44,19 +41,56 @@ defmodule Astarte.DataUpdaterPlant.AMQPEventsProducer do
     GenServer.call(__MODULE__, {:declare_exchange, exchange}, 60_000)
   end
 
+  # Gets a connection worker out of the connection pool, if there is one available
+  # takes a channel out of it channel pool, if there is one available
+  defp do_connect(state) do
+    conn = ExRabbitPool.get_connection_worker(:events_producer_pool)
+
+    case ExRabbitPool.checkout_channel(conn) do
+      {:ok, channel} ->
+        try_to_connect(channel, state)
+
+      {:error, _reason} ->
+        schedule_connect()
+        {:noreply, state}
+    end
+  end
+
+  # When successfully checks out a channel, sets up exchange, and monitors it to handle crashes and reconnections
+  defp try_to_connect(channel, _state) do
+    %{pid: channel_pid} = channel
+
+    case @adapter.declare_exchange(channel, Config.events_exchange_name!(),
+           type: :direct,
+           durable: true
+         ) do
+      :ok ->
+        Process.monitor(channel_pid)
+
+        {:noreply, channel}
+
+      {:error, reason} ->
+        Logger.warn("RabbitMQ Connection error: #{inspect(reason)}",
+          tag: "events_producer_conn_err"
+        )
+
+        schedule_connect()
+    end
+  end
+
   # Server callbacks
 
-  def init(_args) do
-    rabbitmq_connect(false)
+  @impl true
+  def init(_opts) do
+    {:ok, [], {:continue, :connect}}
   end
 
-  def terminate(_reason, %Channel{conn: conn} = chan) do
-    Channel.close(chan)
-    Connection.close(conn)
-  end
+  @impl true
+  def handle_continue(:connect, state), do: do_connect(state)
 
+  @impl true
   def handle_call({:publish, exchange, routing_key, payload, opts}, _from, chan) do
-    reply = Basic.publish(chan, exchange, routing_key, payload, opts)
+    reply = @adapter.publish(chan, exchange, routing_key, payload, opts)
 
     {:reply, reply, chan}
   end
@@ -64,53 +98,27 @@ defmodule Astarte.DataUpdaterPlant.AMQPEventsProducer do
   def handle_call({:declare_exchange, exchange}, _from, chan) do
     # TODO: we need to decide who is responsible of deleting the exchange once it is
     # no longer needed
-    reply = Exchange.declare(chan, exchange, :direct, durable: true)
+    reply = @adapter.declare_exchange(chan, exchange, type: :direct, durable: true)
 
     {:reply, reply, chan}
   end
 
-  def handle_info(:try_to_connect, _state) do
-    {:ok, new_state} = rabbitmq_connect()
-    {:noreply, new_state}
-  end
-
-  def handle_info({:DOWN, _, :process, _pid, reason}, _state) do
+  @impl true
+  def handle_info({:DOWN, _, :process, _pid, reason}, state) do
     Logger.warn("RabbitMQ connection lost: #{inspect(reason)}. Trying to reconnect...",
       tag: "events_producer_conn_lost"
     )
 
-    {:ok, new_state} = rabbitmq_connect()
-    {:noreply, new_state}
+    do_connect(state)
   end
 
-  defp rabbitmq_connect(retry \\ true) do
-    with {:ok, conn} <- Connection.open(Config.amqp_producer_options!()),
-         {:ok, chan} <- Channel.open(conn),
-         :ok <- Exchange.declare(chan, Config.events_exchange_name!(), :direct, durable: true),
-         # Get notifications when the chan or connection goes down
-         Process.monitor(chan.pid) do
-      {:ok, chan}
-    else
-      {:error, reason} ->
-        Logger.warn("RabbitMQ Connection error: #{inspect(reason)}",
-          tag: "events_producer_conn_err"
-        )
-
-        maybe_retry(retry)
-
-      :error ->
-        Logger.warn("Unknown RabbitMQ connection error", tag: "events_producer_conn_err")
-        maybe_retry(retry)
-    end
+  def handle_info(:try_to_connect, state) do
+    do_connect(state)
   end
 
-  defp maybe_retry(retry) do
-    if retry do
-      Logger.warn("Retrying connection in #{@connection_backoff} ms")
-      :erlang.send_after(@connection_backoff, :erlang.self(), :try_to_connect)
-      {:ok, :not_connected}
-    else
-      {:stop, :connection_failed}
-    end
+  defp schedule_connect() do
+    _ = Logger.warn("Retrying connection in #{@connection_backoff} ms")
+    Process.send_after(@connection_backoff, self(), :try_to_connect)
+    {:noreply, :not_connected}
   end
 end
