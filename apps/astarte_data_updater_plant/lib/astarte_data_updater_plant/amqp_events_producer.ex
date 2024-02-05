@@ -41,23 +41,30 @@ defmodule Astarte.DataUpdaterPlant.AMQPEventsProducer do
     GenServer.call(__MODULE__, {:declare_exchange, exchange}, 60_000)
   end
 
-  # Gets a connection worker out of the connection pool, if there is one available
-  # takes a channel out of it channel pool, if there is one available
+  # Get a connection worker out of the connection pool, if there is one available.
+  # Then take a channel out of its channel pool, if there is one available, and try
+  # to declare an exchange and monitor the channel.
+  # If anything fails, try again in @connection_backoff ms.
   defp do_connect(state) do
     conn = ExRabbitPool.get_connection_worker(:events_producer_pool)
 
     case ExRabbitPool.checkout_channel(conn) do
       {:ok, channel} ->
-        try_to_connect(channel, state)
+        _ = Logger.debug("Successfully checked out channel for events producer")
+        try_to_setup_exchange(channel, conn, state)
 
       {:error, _reason} ->
+        _ =
+          Logger.warn("Failed to check out channel for events producer",
+            tag: "events_producer_checkout_channel_fail"
+          )
+
         schedule_connect()
         {:noreply, state}
     end
   end
 
-  # When successfully checks out a channel, sets up exchange, and monitors it to handle crashes and reconnections
-  defp try_to_connect(channel, _state) do
+  defp try_to_setup_exchange(channel, conn, _state) do
     %{pid: channel_pid} = channel
 
     case @adapter.declare_exchange(channel, Config.events_exchange_name!(),
@@ -65,6 +72,7 @@ defmodule Astarte.DataUpdaterPlant.AMQPEventsProducer do
            durable: true
          ) do
       :ok ->
+        _ = Logger.debug("Successfully declared events exchange")
         Process.monitor(channel_pid)
 
         {:noreply, channel}
@@ -73,6 +81,8 @@ defmodule Astarte.DataUpdaterPlant.AMQPEventsProducer do
         Logger.warn("RabbitMQ Connection error: #{inspect(reason)}",
           tag: "events_producer_conn_err"
         )
+
+        _ = ExRabbitPool.checkin_channel(conn, channel)
 
         schedule_connect()
     end

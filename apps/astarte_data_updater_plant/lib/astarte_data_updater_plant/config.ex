@@ -228,13 +228,6 @@ defmodule Astarte.DataUpdaterPlant.Config do
           type: :integer,
           default: 10
 
-  @envdoc "The number of channels per RabbitMQ connection used to consume data"
-  app_env :amqp_consumer_channels_per_connection_number,
-          :astarte_data_updater_plant,
-          :amqp_consumer_channels_per_connection_number,
-          type: :integer,
-          default: 10
-
   @envdoc "The number of connections to RabbitMQ used to produce data"
   app_env :events_producer_connection_number,
           :astarte_data_updater_plant,
@@ -244,6 +237,11 @@ defmodule Astarte.DataUpdaterPlant.Config do
 
   # Since we have one channel per queue, this is not configurable
   def events_producer_channels_per_connection_number!(), do: 1
+
+  # Since we have one channel per queue, this is not configurable
+  def amqp_consumer_channels_per_connection_number!() do
+    ceil(data_queue_total_count!() / amqp_consumer_connection_number!())
+  end
 
   @doc """
   Returns the AMQP data consumer connection options

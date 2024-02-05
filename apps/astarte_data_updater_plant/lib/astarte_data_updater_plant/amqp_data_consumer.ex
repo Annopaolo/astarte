@@ -29,11 +29,10 @@ defmodule Astarte.DataUpdaterPlant.AMQPDataConsumer do
   use GenServer
 
   alias AMQP.Channel
-  alias AMQP.Connection
   alias Astarte.DataUpdaterPlant.Config
   alias Astarte.DataUpdaterPlant.DataUpdater
 
-  # TODO make this customizable
+  # TODO should this be customizable?
   @reconnect_interval 1_000
   @adapter Config.amqp_adapter!()
   @msg_type_header "x_astarte_msg_type"
@@ -112,29 +111,29 @@ defmodule Astarte.DataUpdaterPlant.AMQPDataConsumer do
   def handle_continue(:connect, state), do: do_connect(state)
 
   @impl true
-  def handle_call({:ack, delivery_tag}, _from, chan) do
+  def handle_call({:ack, delivery_tag}, _from, %State{channel: chan} = state) do
     res = @adapter.ack(chan, delivery_tag)
-    {:reply, res, chan}
+    {:reply, res, state}
   end
 
-  def handle_call({:discard, delivery_tag}, _from, chan) do
+  def handle_call({:discard, delivery_tag}, _from, %State{channel: chan} = state) do
     res = @adapter.reject(chan, delivery_tag, requeue: false)
-    {:reply, res, chan}
+    {:reply, res, state}
   end
 
-  def handle_call({:requeue, delivery_tag}, _from, chan) do
+  def handle_call({:requeue, delivery_tag}, _from, %State{channel: chan} = state) do
     res = @adapter.reject(chan, delivery_tag, requeue: true)
-    {:reply, res, chan}
+    {:reply, res, state}
   end
 
-  def handle_call({:start_message_tracker, realm, device_id}, _from, chan) do
+  def handle_call({:start_message_tracker, realm, device_id}, _from, state) do
     res = DataUpdater.get_message_tracker(realm, device_id)
-    {:reply, res, chan}
+    {:reply, res, state}
   end
 
-  def handle_call({:start_data_updater, realm, device_id, message_tracker}, _from, chan) do
+  def handle_call({:start_data_updater, realm, device_id, message_tracker}, _from, state) do
     res = DataUpdater.get_data_updater_process(realm, device_id, message_tracker)
-    {:reply, res, chan}
+    {:reply, res, state}
   end
 
   @impl true
@@ -142,11 +141,11 @@ defmodule Astarte.DataUpdaterPlant.AMQPDataConsumer do
 
   def handle_info(
         {:DOWN, _, :process, pid, :normal},
-        %Channel{pid: chan_pid, conn: %Connection{pid: conn_pid}} = chan
+        %State{channel: %Channel{pid: chan_pid}} = state
       )
-      when pid != chan_pid and pid != conn_pid do
+      when pid != chan_pid do
     # This is a Message Tracker deactivating itself normally, do nothing
-    {:noreply, chan}
+    {:noreply, state}
   end
 
   # Make sure to handle monitored message trackers exit messages
@@ -164,22 +163,23 @@ defmodule Astarte.DataUpdaterPlant.AMQPDataConsumer do
   end
 
   # Confirmation sent by the broker after registering this process as a consumer
-  def handle_info({:basic_consume_ok, %{consumer_tag: _consumer_tag}}, chan) do
-    {:noreply, chan}
+  def handle_info({:basic_consume_ok, %{consumer_tag: _consumer_tag}}, state) do
+    {:noreply, state}
   end
 
   # Sent by the broker when the consumer is unexpectedly cancelled (such as after a queue deletion)
-  def handle_info({:basic_cancel, %{consumer_tag: _consumer_tag}}, chan) do
-    {:noreply, chan}
+  def handle_info({:basic_cancel, %{consumer_tag: _consumer_tag}}, state) do
+    {:noreply, state}
   end
 
   # Confirmation sent by the broker to the consumer process after a Basic.cancel
-  def handle_info({:basic_cancel_ok, %{consumer_tag: _consumer_tag}}, chan) do
-    {:noreply, chan}
+  def handle_info({:basic_cancel_ok, %{consumer_tag: _consumer_tag}}, state) do
+    {:noreply, state}
   end
 
   # Message consumed
-  def handle_info({:basic_deliver, payload, meta}, chan) do
+  def handle_info({:basic_deliver, payload, meta}, state) do
+    %State{channel: chan} = state
     {headers, no_headers_meta} = Map.pop(meta, :headers, [])
     headers_map = amqp_headers_to_map(headers)
     msg_type = Map.get(headers_map, @msg_type_header, headers_map)
@@ -195,7 +195,7 @@ defmodule Astarte.DataUpdaterPlant.AMQPDataConsumer do
         @adapter.ack(chan, meta.delivery_tag)
     end
 
-    {:noreply, chan}
+    {:noreply, state}
   end
 
   defp schedule_connect() do
@@ -203,34 +203,47 @@ defmodule Astarte.DataUpdaterPlant.AMQPDataConsumer do
   end
 
   defp do_connect(state) do
-    # This will block until Rabbit connection is up
-    # rabbitmq_connection = ConnectionManager.get_connection()
     conn = ExRabbitPool.get_connection_worker(:amqp_consumer_pool)
 
     case ExRabbitPool.checkout_channel(conn) do
       {:ok, channel} ->
-        try_to_connect(channel, state)
+        _ =
+          Logger.debug(
+            "Successfully checked out channel for consumer on queue #{state.queue_name}"
+          )
+
+        try_to_setup_consumer(channel, conn, state)
 
       {:error, _reason} ->
+        _ = Logger.warn("Failed to check out channel for consumer on queue #{state.queue_name}")
         schedule_connect()
         {:noreply, state}
     end
   end
 
-  defp try_to_connect(channel, state) do
-    %{pid: channel_pid} = channel
-    %{queue_name: queue_name} = state
+  defp try_to_setup_consumer(channel, conn, state) do
+    %Channel{pid: channel_pid} = channel
+    %State{queue_name: queue_name} = state
 
     with :ok <- @adapter.qos(channel, prefetch_count: Config.consumer_prefetch_count!()),
          {:ok, _queue} <- @adapter.declare_queue(channel, queue_name, durable: true),
          {:ok, _consumer_tag} <- @adapter.consume(channel, queue_name, self()) do
       ref = Process.monitor(channel_pid)
 
-      _ = Logger.debug("Declared queue #{queue_name}", tag: "queue_declared")
+      _ =
+        Logger.debug("AMQPDataConsumer for queue #{queue_name} initialized",
+          tag: "data_consumer_init_ok"
+        )
 
       {:noreply, %State{state | channel: channel, monitor: ref}}
     else
-      {:error, _reason} ->
+      {:error, reason} ->
+        Logger.warn("Error initializing AMQPDataConsumer: #{inspect(reason)}",
+          tag: "data_consumer_init_err"
+        )
+
+        # Something went wrong, let's put the channel back where it belongs
+        _ = ExRabbitPool.checkin_channel(conn, channel)
         schedule_connect()
         {:noreply, %{state | channel: nil, monitor: nil}}
     end
