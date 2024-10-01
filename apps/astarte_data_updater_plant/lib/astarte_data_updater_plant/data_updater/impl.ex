@@ -1496,11 +1496,7 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
 
     timestamp_ms = div(timestamp, 10_000)
 
-    # TODO: check payload size, to avoid anoying crashes
-
-    <<_size_header::size(32), zlib_payload::binary>> = payload
-
-    case PayloadsDecoder.safe_inflate(zlib_payload) do
+    case inflate_purge_properties_payload(payload) do
       {:ok, decoded_payload} ->
         :ok = prune_device_properties(new_state, decoded_payload, timestamp_ms)
         MessageTracker.ack_delivery(new_state.message_tracker, message_id)
@@ -1529,12 +1525,38 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
     end
   end
 
-  def handle_control(state, "/emptyCache", _payload, message_id, timestamp) do
+  defp inflate_purge_properties_payload(<<255, 255, 255, 255, payload::binary>>) do
+    _ =
+      Logger.debug("Received uncompressed purge properties properties payload",
+        tag: "hello_simo"
+      )
+
+    {:ok, payload}
+  end
+
+  defp inflate_purge_properties_payload(<<_size_header::size(32), zlib_payload::binary>>) do
+    _ =
+      Logger.debug("Received compressed purge properties properties payload",
+        tag: "hello_simo"
+      )
+
+    # TODO: check payload size, to avoid anoying crashes
+    PayloadsDecoder.safe_inflate(zlib_payload)
+  end
+
+  def handle_control(state, "/emptyCache", payload, message_id, timestamp) do
     {:ok, db_client} = Database.connect(realm: state.realm)
 
     new_state = execute_time_based_actions(state, timestamp, db_client)
 
-    with :ok <- send_control_consumer_properties(state, db_client),
+    encode_properties? = if payload == "0", do: false, else: true
+
+    _ =
+      Logger.debug("Should I compress purge properties payload? #{inspect(encode_properties?)}",
+        tag: "hello_simo"
+      )
+
+    with :ok <- send_control_consumer_properties(state, db_client, encode_properties?),
          {:ok, new_state} <- resend_all_properties(state, db_client),
          :ok <- Queries.set_pending_empty_cache(db_client, new_state.device_id, false) do
       MessageTracker.ack_delivery(state.message_tracker, message_id)
@@ -2694,7 +2716,7 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
     end)
   end
 
-  defp send_control_consumer_properties(state, db_client) do
+  defp send_control_consumer_properties(state, db_client, encode_properties?) do
     Logger.debug("Device introspection: #{inspect(state.introspection)}.")
 
     abs_paths_list =
@@ -2713,7 +2735,12 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
 
     # TODO: use the returned byte count in stats
     with {:ok, _bytes} <-
-           send_consumer_properties_payload(state.realm, state.device_id, abs_paths_list) do
+           send_consumer_properties_payload(
+             state.realm,
+             state.device_id,
+             abs_paths_list,
+             encode_properties?
+           ) do
       :ok
     end
   end
@@ -2782,15 +2809,24 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
     :ok
   end
 
-  defp send_consumer_properties_payload(realm, device_id, abs_paths_list) do
+  defp send_consumer_properties_payload(realm, device_id, abs_paths_list, compress_payload?) do
     topic = "#{realm}/#{Device.encode_device_id(device_id)}/control/consumer/properties"
 
     uncompressed_payload = Enum.join(abs_paths_list, ";")
 
-    payload_size = byte_size(uncompressed_payload)
-    compressed_payload = :zlib.compress(uncompressed_payload)
+    payload =
+      if compress_payload? do
+        _ = Logger.debug("Compressing purge properties payload", tag: "hello_simo")
+        payload_size = byte_size(uncompressed_payload)
+        compressed_payload = :zlib.compress(uncompressed_payload)
 
-    payload = <<payload_size::unsigned-big-integer-size(32), compressed_payload::binary>>
+        <<payload_size::unsigned-big-integer-size(32), compressed_payload::binary>>
+      else
+        _ =
+          Logger.debug("Not doing any compression on purge properties payload", tag: "hello_simo")
+
+        <<255, 255, 255, 255, uncompressed_payload>>
+      end
 
     case VMQPlugin.publish(topic, payload, 2) do
       {:ok, %{local_matches: local, remote_matches: remote}} when local + remote == 1 ->
