@@ -15,9 +15,9 @@ Astarte MQTT v1 Protocol relies on few well known reserved topics.
 | Topic                                                  | Purpose          | Published By | QoS     | Payload Format                          |
 |--------------------------------------------------------|------------------|--------------|---------|-----------------------------------------|
 | `<realm name>/<device id>`                             | Introspection    | Device       | 2       | ASCII plain text, ':' and ';' delimited |
-| `<realm name>/<device id>/control/emptyCache`          | Empty Cache      | Device       | 2       | ASCII plain text (always "1")           |
-| `<realm name>/<device id>/control/consumer/properties` | Purge Properties | Astarte      | 2       | deflated plain text                     |
-| `<realm name>/<device id>/control/producer/properties` | Purge Properties | Device       | 2       | deflated plain text                     |
+| `<realm name>/<device id>/control/emptyCache`          | Empty Cache      | Device       | 2       | ASCII plain text (either "0" or "1")           |
+| `<realm name>/<device id>/control/consumer/properties` | Purge Properties | Astarte      | 2       | plain text (either deflated or not)                     |
+| `<realm name>/<device id>/control/producer/properties` | Purge Properties | Device       | 2       | plain text (either deflated or not)                     |
 | `<realm name>/<device id>/<interface name>/<path>`     | Publish Data     | Both         | 0, 1, 2 | BSON (or empty)                         |
 
 For clarity reasons all `<realm name>/<device id>` prefixes will be omitted on the following paragraphs, those topics will be called device topics.
@@ -101,9 +101,11 @@ com.example.MyInterface:1:0;org.example.DraftInterface:0:3
 ## Empty Cache
 
 Astarte MQTT v1 strives to save bandwidth upon reconnections, to make sure even frequent reconnections don't affect bandwidth consumption. As such, upon connecting and if MQTT advertises a session present, both sides assume that data flow is ordered and consistent. However, there might be cases where this guarantee isn't respected by the device for a number of reasons (e.g.: new device, factory reset, cache lost...). In this case, a device might declare that it has no confidence about its status and its known properties, and can request to resynchronise entirely with Astarte.
-In Astarte jargon this message is called *empty cache* and it is performed by publising "1" on the device `/control/emptyCache` topic.
+In Astarte jargon this message is called *empty cache* and it is performed by publising either "0" or "1" on the device `/control/emptyCache` topic.
 
 After an empty cache message properties might be purged and Astarte might publish all the server owned properties again.
+
+If the empty cache payload is "0", then the purge properties payload contains the uncompressed properties list; otherwise, the properties list is compressed.
 
 ## Session Present
 
@@ -117,8 +119,9 @@ After a clean session properties might be purged.
 Either a Device or Astarte may tell the remote host the set properties list. Any property that is not part of the list will be deleted from any cache or database.
 This task is called _purge properties_ in Astarte jargon, and it is performed by publishing a the list of known set properties to `/control/consumer/properties` or `/control/producer/properties`.
 
-Purge Properties payload is a zlib deflated plain text, with an additional 4 bytes header.
-The additional 4 bytes header is the size of the uncompressed payload, encoded as big endian uint32.
+Purge Properties payload is composed of two parts:
+- A 4 bytes header that holds the size of the uncompressed payload, encoded as big endian uint32
+- a zlib deflated plain text
 
 The following example is a payload compressed using zlib default compression, with the additional 4 bytes header:
 
@@ -143,6 +146,8 @@ The following example is the inflated previous payload:
 ```
 com.example.MyInterface/some/path;org.example.DraftInterface/otherPath
 ```
+
+If the header is set to the magic value `ff ff ff ff`, then the properties list is not compressed.
 
 This protocol feature is fundamental when a device has any interface with an *allow_unset* mapping, *purge properties* allows to correct any error due to unhandled unset messages.
 
