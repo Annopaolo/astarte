@@ -1317,11 +1317,6 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
     }
   end
 
-  def handle_introspection(%State{discard_messages: true} = state, _, message_id, _) do
-    MessageTracker.discard(state.message_tracker, message_id)
-    state
-  end
-
   def process_introspection(state, new_introspection_list, payload, timestamp) do
     {:ok, db_client} = Database.connect(realm: state.realm)
 
