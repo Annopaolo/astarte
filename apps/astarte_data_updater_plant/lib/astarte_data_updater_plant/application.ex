@@ -53,6 +53,7 @@ defmodule Astarte.DataUpdaterPlant.Application do
       Astarte.DataUpdaterPlantWeb.Telemetry,
       {Xandra.Cluster, dup_xandra_opts},
       {Astarte.DataAccess, data_access_opts},
+      Astarte.DataUpdaterPlant.DataPipelineSupervisor,
       {Mississippi.Consumer, mississippi_consumer_opts!()}
     ]
 
@@ -63,15 +64,16 @@ defmodule Astarte.DataUpdaterPlant.Application do
   defp mississippi_consumer_opts!() do
     [
       amqp_consumer_options: [host: Config.amqp_consumer_host!()],
-      events_consumer_connection_number: Config.amqp_consumer_connection_number!(),
-      mississippi_queues_config: [
-        events_exchange_name: Config.events_exchange_name!(),
-        data_queue_prefix: Config.data_queue_prefix!(),
-        data_queue_range_start: Config.data_queue_range_start!(),
-        data_queue_range_end: Config.data_queue_range_end!(),
-        data_queue_total_count: Config.data_queue_total_count!()
-      ],
-      message_handler: Impl
+      mississippi_config: [
+        queues: [
+          events_exchange_name: Config.events_exchange_name!(),
+          prefix: Config.data_queue_prefix!(),
+          range_start: Config.data_queue_range_start!(),
+          range_end: Config.data_queue_range_end!(),
+          total_count: Config.data_queue_total_count!()
+        ],
+        message_handler: Impl
+      ]
     ]
   end
 end
