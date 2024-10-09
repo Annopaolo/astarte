@@ -169,6 +169,9 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
       :dump_state ->
         {state, state}
 
+      {:start_device_deletion, timestamp} ->
+        start_device_deletion(state, timestamp)
+
       _ ->
         {:ok, state}
     end
