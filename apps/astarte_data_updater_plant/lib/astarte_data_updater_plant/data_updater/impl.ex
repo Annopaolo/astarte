@@ -111,6 +111,7 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
 
   @impl true
   def handle_message(payload, headers, _message_id, timestamp, state) do
+    _ = Logger.debug("Handling message with headers #{inspect(headers)}", tag: "remove_me")
     %{@msg_type_header => message_type} = headers
 
     case message_type do
