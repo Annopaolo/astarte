@@ -68,9 +68,12 @@ defmodule Astarte.DataUpdaterPlant.Application do
         queues: [
           events_exchange_name: Config.events_exchange_name!(),
           prefix: Config.data_queue_prefix!(),
-          range_start: Config.data_queue_range_start!(),
-          range_end: Config.data_queue_range_end!(),
-          total_count: Config.data_queue_total_count!()
+          # Config.data_queue_range_start!(),
+          range_start: 0,
+          # Config.data_queue_range_end!(),
+          range_end: 0,
+          # Config.data_queue_total_count!()
+          total_count: 1
         ],
         message_handler: Impl
       ]
