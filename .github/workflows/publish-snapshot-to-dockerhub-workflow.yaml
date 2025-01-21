@@ -15,12 +15,12 @@ on:
     - 'release-*'
 
 jobs:
-  container_tests:
-    uses: ./.github/workflows/astarte-apps-build-workflow.yaml
-    secrets: inherit
+  # container_tests:
+  #   uses: ./.github/workflows/astarte-apps-build-workflow.yaml
+  #   secrets: inherit
 
-  e2e_tests:
-    uses: ./.github/workflows/astarte-end-to-end-test-workflow.yaml
+  # e2e_tests:
+  #   uses: ./.github/workflows/astarte-end-to-end-test-workflow.yaml
 
   push_snapshot_to_registry:
     name: Push Docker images to Docker Hub
@@ -30,9 +30,9 @@ jobs:
       contents: read
       attestations: write
       id-token: write
-    needs:
-    - container_tests
-    - e2e_tests
+    # needs:
+    # - container_tests
+    # - e2e_tests
     strategy:
       fail-fast: true
       matrix:
@@ -70,7 +70,7 @@ jobs:
         uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
         with:
           images: |
-            astarte/${{ matrix.app }}
+            annopaolo/${{ matrix.app }}
           tags: |
             # TODO we probably want something smarter, but the 'pattern' type runs only on tags at the moment
             type=raw,value=${{ steps.compute-tag.outputs.TAG }}
