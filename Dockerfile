@@ -61,7 +61,7 @@ RUN if [ -f "./entrypoint.sh" ]; then \
 
 # Note: it is important to keep Debian versions in sync, 
 # or incompatibilities between libcrypto will happen
-FROM debian:bookworm-slim
+FROM --platform=${BUILDPLATFORM} debian:bookworm-slim
 
 # Set the locale
 ENV LANG C.UTF-8
