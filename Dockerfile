@@ -1,4 +1,4 @@
-FROM hexpm/elixir:1.15.7-erlang-26.1-debian-bookworm-20230612-slim as base
+FROM --platform=${BUILDPLATFORM} hexpm/elixir:1.15.7-erlang-26.1-debian-bookworm-20230612-slim as base
 
 # install build dependencies
 # --allow-releaseinfo-change allows to pull from 'oldstable'
