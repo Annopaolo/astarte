@@ -41,9 +41,13 @@ defmodule AstarteE2E.Config do
           | {:realm, String.t()}
           | {:device_id, Device.encoded_device_id()}
 
+  @type notifier_option ::
+          {:mail_subject, String.t()}
+
   @type client_options :: [client_option()]
   @type device_options :: Astarte.Device.device_options()
   @type scheduler_options :: [scheduler_option()]
+  @type notifier_options :: [notifier_option()]
 
   @envdoc "Astarte Pairing URL (e.g. https://api.astarte.example.com/pairing)."
   app_env :pairing_url, :astarte_e2e, :pairing_url,
@@ -134,6 +138,12 @@ defmodule AstarteE2E.Config do
     os_env: "E2E_MAIL_FROM_ADDRESS",
     type: NormalizedMailAddress,
     default: ""
+
+  @envdoc "The subject of the notification email."
+  app_env :mail_subject, :astarte_e2e, :mail_subject,
+    os_env: "E2E_MAIL_SUBJECT",
+    type: :binary,
+    required: true
 
   @envdoc """
   The mail service's API key. This env var must be set and valid to use the mail
@@ -227,6 +237,11 @@ defmodule AstarteE2E.Config do
     ]
   end
 
+  @spec notifier_opts() :: notifier_options()
+  def notifier_opts do
+    [mail_subject: mail_subject!()]
+  end
+
   def service_notifier_config do
     case mail_service() do
       {:ok, Bamboo.MailgunAdapter} ->
@@ -257,7 +272,7 @@ defmodule AstarteE2E.Config do
       }
     else
       _ ->
-        Logger.warn("Incomplete mail configuration. The Local Adapter will be used.",
+        Logger.warning("Incomplete mail configuration. The Local Adapter will be used.",
           tag: "local_adapter_fallback"
         )
 
@@ -280,7 +295,7 @@ defmodule AstarteE2E.Config do
       }
     else
       _ ->
-        Logger.warn("Incomplete mail configuration. The Local Adapter will be used.",
+        Logger.warning("Incomplete mail configuration. The Local Adapter will be used.",
           tag: "local_adapter_fallback"
         )
 

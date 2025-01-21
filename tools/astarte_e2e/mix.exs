@@ -22,8 +22,8 @@ defmodule AstarteE2E.MixProject do
   def project do
     [
       app: :astarte_e2e,
-      version: "0.1.0",
-      elixir: "~> 1.11",
+      version: "1.3.0-dev",
+      elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
       dialyzer_cache_directory: dialyzer_cache_directory(Mix.env()),
       deps: deps()
@@ -51,7 +51,7 @@ defmodule AstarteE2E.MixProject do
     [
       {:astarte_device, github: "astarte-platform/astarte-device-sdk-elixir"},
       {:phoenix_gen_socket_client, "~> 4.0"},
-      {:websocket_client, "~> 1.2"},
+      {:websocket_client, "~> 1.5"},
       {:jason, "~> 1.0"},
       {:plug_cowboy, "~> 2.0"},
       {:skogsra, "~> 2.3"},
@@ -65,7 +65,10 @@ defmodule AstarteE2E.MixProject do
       {:bamboo, "~> 1.6"},
       {:bamboo_config_adapter, "~> 1.0"},
       {:hukai, "~> 0.3"},
-      {:dialyzex, github: "Comcast/dialyzex", only: [:dev, :ci]}
+      {:dialyzex, github: "Comcast/dialyzex", only: [:dev, :ci]},
+      # Workaround for Elixir 1.15 / ssl_verify_fun issue
+      # See also: https://github.com/deadtrickster/ssl_verify_fun.erl/pull/27
+      {:ssl_verify_fun, "~> 1.1.0", manager: :rebar3, override: true}
     ]
   end
 end

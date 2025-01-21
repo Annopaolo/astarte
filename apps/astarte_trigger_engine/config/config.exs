@@ -18,13 +18,7 @@
 
 # This file is responsible for configuring your application
 # and its dependencies with the aid of the Mix.Config module.
-use Mix.Config
-
-# lager is used by rabbit_common.
-# Silent it by setting the higher loglevel.
-config :lager,
-  error_logger_redirect: false,
-  handlers: [level: :critical]
+import Config
 
 config :astarte_trigger_engine, :amqp_consumer_options,
   host: "localhost",
@@ -39,4 +33,8 @@ config :astarte_trigger_engine, :amqp_events_exchange_name, "astarte_events"
 
 config :astarte_trigger_engine, :amqp_events_routing_key, "trigger_engine"
 
-import_config "#{Mix.env()}.exs"
+config :astarte_trigger_engine, :events_consumer, Astarte.TriggerEngine.EventsConsumer
+
+config :astarte_trigger_engine, :amqp_adapter, ExRabbitPool.RabbitMQ
+
+import_config "#{config_env()}.exs"

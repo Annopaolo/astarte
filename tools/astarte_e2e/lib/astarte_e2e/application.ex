@@ -31,7 +31,7 @@ defmodule AstarteE2E.Application do
       children = [
         {Registry, keys: :unique, name: Registry.AstarteE2E},
         AstarteE2EWeb.Telemetry,
-        ServiceNotifier,
+        {ServiceNotifier, Config.notifier_opts()},
         {Device, Config.device_opts()},
         {Client, Config.client_opts()},
         {Scheduler, Config.scheduler_opts()}
@@ -42,7 +42,10 @@ defmodule AstarteE2E.Application do
       Supervisor.start_link(children, opts)
     else
       {:error, reason} ->
-        Logger.warn("Configuration incomplete. Unable to start process with reason: #{reason}.")
+        Logger.warning(
+          "Configuration incomplete. Unable to start process with reason: #{reason}."
+        )
+
         {:shutdown, reason}
     end
   end

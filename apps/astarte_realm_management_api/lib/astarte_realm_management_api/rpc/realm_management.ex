@@ -1,7 +1,7 @@
 #
 # This file is part of Astarte.
 #
-# Copyright 2017-2018 Ispirata Srl
+# Copyright 2017 - 2023 SECO Mind Srl
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -23,6 +23,10 @@ defmodule Astarte.RealmManagement.API.RPC.RealmManagement do
     DeleteTrigger,
     GenericErrorReply,
     GenericOkReply,
+    GetDatastreamMaximumStorageRetention,
+    GetDatastreamMaximumStorageRetentionReply,
+    GetDeviceRegistrationLimit,
+    GetDeviceRegistrationLimitReply,
     GetHealth,
     GetHealthReply,
     GetInterfacesList,
@@ -42,7 +46,16 @@ defmodule Astarte.RealmManagement.API.RPC.RealmManagement do
     InstallTrigger,
     Reply,
     UpdateInterface,
-    UpdateJWTPublicKeyPEM
+    UpdateJWTPublicKeyPEM,
+    InstallTriggerPolicy,
+    GetTriggerPoliciesList,
+    GetTriggerPoliciesListReply,
+    GetTriggerPolicySource,
+    GetTriggerPolicySourceReply,
+    DeleteTriggerPolicy,
+    DeleteDevice,
+    GetDetailedInterfacesList,
+    GetDetailedInterfacesListReply
   }
 
   alias Astarte.Core.Triggers.SimpleTriggersProtobuf.TaggedSimpleTrigger
@@ -75,6 +88,16 @@ defmodule Astarte.RealmManagement.API.RPC.RealmManagement do
     |> extract_reply()
   end
 
+  def get_detailed_interfaces_list(realm_name) do
+    %GetDetailedInterfacesList{
+      realm_name: realm_name
+    }
+    |> encode_call(:get_detailed_interfaces_list)
+    |> @rpc_client.rpc_call(@destination)
+    |> decode_reply()
+    |> extract_reply()
+  end
+
   def get_interface(realm_name, interface_name, interface_major_version) do
     %GetInterfaceSource{
       realm_name: realm_name,
@@ -87,11 +110,11 @@ defmodule Astarte.RealmManagement.API.RPC.RealmManagement do
     |> extract_reply()
   end
 
-  def install_interface(realm_name, interface_json) do
+  def install_interface(realm_name, interface_json, opts) do
     %InstallInterface{
       realm_name: realm_name,
       interface_json: interface_json,
-      async_operation: true
+      async_operation: Keyword.get(opts, :async_operation, true)
     }
     |> encode_call(:install_interface)
     |> @rpc_client.rpc_call(@destination)
@@ -99,11 +122,11 @@ defmodule Astarte.RealmManagement.API.RPC.RealmManagement do
     |> extract_reply()
   end
 
-  def update_interface(realm_name, interface_json) do
+  def update_interface(realm_name, interface_json, opts) do
     %UpdateInterface{
       realm_name: realm_name,
       interface_json: interface_json,
-      async_operation: true
+      async_operation: Keyword.get(opts, :async_operation, true)
     }
     |> encode_call(:update_interface)
     |> @rpc_client.rpc_call(@destination)
@@ -111,12 +134,12 @@ defmodule Astarte.RealmManagement.API.RPC.RealmManagement do
     |> extract_reply()
   end
 
-  def delete_interface(realm_name, interface_name, interface_major_version) do
+  def delete_interface(realm_name, interface_name, interface_major_version, opts) do
     %DeleteInterface{
       realm_name: realm_name,
       interface_name: interface_name,
       interface_major_version: interface_major_version,
-      async_operation: true
+      async_operation: Keyword.get(opts, :async_operation, true)
     }
     |> encode_call(:delete_interface)
     |> @rpc_client.rpc_call(@destination)
@@ -134,6 +157,26 @@ defmodule Astarte.RealmManagement.API.RPC.RealmManagement do
     |> extract_reply()
   end
 
+  def get_device_registration_limit(realm_name) do
+    %GetDeviceRegistrationLimit{
+      realm_name: realm_name
+    }
+    |> encode_call(:get_device_registration_limit)
+    |> @rpc_client.rpc_call(@destination)
+    |> decode_reply()
+    |> extract_reply()
+  end
+
+  def get_datastream_maximum_storage_retention(realm_name) do
+    %GetDatastreamMaximumStorageRetention{
+      realm_name: realm_name
+    }
+    |> encode_call(:get_datastream_maximum_storage_retention)
+    |> @rpc_client.rpc_call(@destination)
+    |> decode_reply()
+    |> extract_reply()
+  end
+
   def update_jwt_public_key_pem(realm_name, jwt_public_key_pem) do
     %UpdateJWTPublicKeyPEM{
       realm_name: realm_name,
@@ -145,7 +188,7 @@ defmodule Astarte.RealmManagement.API.RPC.RealmManagement do
     |> extract_reply()
   end
 
-  def install_trigger(realm_name, trigger_name, action, tagged_simple_triggers) do
+  def install_trigger(realm_name, trigger_name, policy_name, action, tagged_simple_triggers) do
     serialized_tagged_simple_triggers =
       Enum.map(tagged_simple_triggers, &TaggedSimpleTrigger.encode/1)
 
@@ -153,7 +196,8 @@ defmodule Astarte.RealmManagement.API.RPC.RealmManagement do
       realm_name: realm_name,
       trigger_name: trigger_name,
       action: action,
-      serialized_tagged_simple_triggers: serialized_tagged_simple_triggers
+      serialized_tagged_simple_triggers: serialized_tagged_simple_triggers,
+      trigger_policy: policy_name
     }
     |> encode_call(:install_trigger)
     |> @rpc_client.rpc_call(@destination)
@@ -201,6 +245,62 @@ defmodule Astarte.RealmManagement.API.RPC.RealmManagement do
     |> extract_reply()
   end
 
+  def get_trigger_policies_list(realm_name) do
+    %GetTriggerPoliciesList{
+      realm_name: realm_name
+    }
+    |> encode_call(:get_trigger_policies_list)
+    |> @rpc_client.rpc_call(@destination)
+    |> decode_reply()
+    |> extract_reply()
+  end
+
+  def get_trigger_policy_source(realm_name, trigger_policy_name) do
+    %GetTriggerPolicySource{
+      realm_name: realm_name,
+      trigger_policy_name: trigger_policy_name
+    }
+    |> encode_call(:get_trigger_policy_source)
+    |> @rpc_client.rpc_call(@destination)
+    |> decode_reply()
+    |> extract_reply()
+  end
+
+  def install_trigger_policy(realm_name, trigger_policy_json) do
+    %InstallTriggerPolicy{
+      realm_name: realm_name,
+      trigger_policy_json: trigger_policy_json,
+      async_operation: true
+    }
+    |> encode_call(:install_trigger_policy)
+    |> @rpc_client.rpc_call(@destination)
+    |> decode_reply()
+    |> extract_reply()
+  end
+
+  def delete_trigger_policy(realm_name, trigger_policy_name) do
+    %DeleteTriggerPolicy{
+      realm_name: realm_name,
+      trigger_policy_name: trigger_policy_name,
+      async_operation: true
+    }
+    |> encode_call(:delete_trigger_policy)
+    |> @rpc_client.rpc_call(@destination)
+    |> decode_reply()
+    |> extract_reply()
+  end
+
+  def delete_device(realm_name, device_id) do
+    %DeleteDevice{
+      realm_name: realm_name,
+      device_id: device_id
+    }
+    |> encode_call(:delete_device)
+    |> @rpc_client.rpc_call(@destination)
+    |> decode_reply()
+    |> extract_reply()
+  end
+
   defp encode_call(call, callname) do
     %Call{call: {callname, call}}
     |> Call.encode()
@@ -241,7 +341,7 @@ defmodule Astarte.RealmManagement.API.RPC.RealmManagement do
       {:error, reason}
     rescue
       ArgumentError ->
-        _ = Logger.warn("Received unknown error: #{inspect(name)}.", tag: "amqp_generic_error")
+        _ = Logger.warning("Received unknown error: #{inspect(name)}.", tag: "amqp_generic_error")
         {:error, :unknown}
     end
   end
@@ -268,6 +368,13 @@ defmodule Astarte.RealmManagement.API.RPC.RealmManagement do
     {:ok, list}
   end
 
+  defp extract_reply(
+         {:get_detailed_interfaces_list_reply,
+          %GetDetailedInterfacesListReply{interface_json: list}}
+       ) do
+    {:ok, list}
+  end
+
   defp extract_reply({:get_interface_source_reply, %GetInterfaceSourceReply{source: source}}) do
     {:ok, source}
   end
@@ -287,7 +394,8 @@ defmodule Astarte.RealmManagement.API.RPC.RealmManagement do
        ) do
     %Trigger{
       name: trigger_name,
-      action: trigger_action
+      action: trigger_action,
+      policy: policy
     } = Trigger.decode(trigger_data)
 
     tagged_simple_triggers =
@@ -295,18 +403,53 @@ defmodule Astarte.RealmManagement.API.RPC.RealmManagement do
         TaggedSimpleTrigger.decode(serialized_tagged_simple_trigger)
       end
 
-    {
-      :ok,
-      %{
-        trigger_name: trigger_name,
-        trigger_action: trigger_action,
-        tagged_simple_triggers: tagged_simple_triggers
-      }
-    }
+    {:ok,
+     %{
+       trigger_name: trigger_name,
+       trigger_action: trigger_action,
+       tagged_simple_triggers: tagged_simple_triggers,
+       policy: policy
+     }}
   end
 
   defp extract_reply({:get_triggers_list_reply, %GetTriggersListReply{triggers_names: triggers}}) do
     {:ok, triggers}
+  end
+
+  defp extract_reply(
+         {:get_trigger_policies_list_reply,
+          %GetTriggerPoliciesListReply{trigger_policies_names: list}}
+       ) do
+    {:ok, list}
+  end
+
+  defp extract_reply(
+         {:get_trigger_policy_source_reply, %GetTriggerPolicySourceReply{source: source}}
+       ) do
+    {:ok, source}
+  end
+
+  defp extract_reply(
+         {:get_device_registration_limit_reply,
+          %GetDeviceRegistrationLimitReply{device_registration_limit: limit}}
+       ) do
+    {:ok, limit}
+  end
+
+  defp extract_reply(
+         {:get_datastream_maximum_storage_retention_reply,
+          %GetDatastreamMaximumStorageRetentionReply{
+            datastream_maximum_storage_retention: 0
+          }}
+       ) do
+    {:ok, nil}
+  end
+
+  defp extract_reply(
+         {:get_datastream_maximum_storage_retention_reply,
+          %GetDatastreamMaximumStorageRetentionReply{} = reply}
+       ) do
+    {:ok, reply.datastream_maximum_storage_retention}
   end
 
   defp extract_reply({:error, :rpc_error}) do

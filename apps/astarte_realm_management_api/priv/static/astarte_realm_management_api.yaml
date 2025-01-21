@@ -15,7 +15,7 @@ info:
     Astarte's Realm Management API is the main mechanism to configure a Realm.
     It allows installing and managing Interfaces, Triggers and any configuration
     of the Realm itself.
-  version: 1.0.0
+  version: 1.3.0-dev
   title: Astarte Realm Management API
   contact:
     email: info@ispirata.com
@@ -30,12 +30,12 @@ tags:
       possible) and updating Interfaces in a Realm.
     externalDocs:
       description: User documentation
-      url: 'https://docs.astarte-platform.org/1.0/030-manage_interfaces.html'
+      url: 'https://docs.astarte-platform.org/astarte/1.0/030-manage_interfaces.html'
   - name: trigger
     description: Trigger management
     externalDocs:
       description: User documentation
-      url: 'https://docs.astarte-platform.org/1.0/060-triggers.html'
+      url: 'https://docs.astarte-platform.org/astarte/1.0/060-triggers.html'
 paths:
   '/{realm_name}/config/auth':
     parameters:
@@ -77,6 +77,46 @@ paths:
           $ref: '#/components/responses/ConfigValidationError'
       requestBody:
         $ref: '#/components/requestBodies/PutAuthConfig'
+  '/{realm_name}/config/device_registration_limit':
+    parameters:
+      - $ref: '#/components/parameters/Realm'
+    get:
+      tags:
+        - config
+      summary: Get device registration limit
+      description: Get the maximum number of devices that can be registered in the realm.
+      operationId: getDeviceRegistrationLimit
+      security:
+        - JWT: []
+      responses:
+        '200':
+          $ref: '#/components/responses/GetDeviceRegistrationLimit'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  '/{realm_name}/config/datastream_maximum_storage_retention':
+    parameters:
+      - $ref: '#/components/parameters/Realm'
+    get:
+      tags:
+        - config
+      summary: Get datastream maximum storage retention
+      description: Get the maximum storage retention for datastreams belonging to the realm, in seconds.
+      operationId: getDatastreamMaximumStorageRetention
+      security:
+        - JWT: []
+      responses:
+        '200':
+          $ref: '#/components/responses/GetDatastreamMaximumStorageRetention'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
   '/{realm_name}/interfaces':
     parameters:
       - $ref: '#/components/parameters/Realm'
@@ -84,10 +124,20 @@ paths:
       tags:
         - interface
       summary: Get interface list
-      description: Get a list of all installed interface names.
+      description: Get a list of all installed interfaces. By default a list of interface names 
+        is returned. The complete interface definitions list can be optionally retrieved rather than interfaces names list using
+        the `detailed` option.
       operationId: getInterfaceList
       security:
         - JWT: []
+      parameters:
+        - name: detailed
+          in: query
+          description: If true, interface definitions are returned instead of just names.
+          required: false
+          schema:
+            type: boolean
+            default: false
       responses:
         '200':
           $ref: '#/components/responses/GetInterfaceList'
@@ -102,10 +152,20 @@ paths:
       description: >-
         Install a new interface, or a newer major version for a given interface.
         Validation is performed, and an error is returned if interface cannot be
-        installed. The installation is performed asynchronously.
+        installed. The installation is performed asynchronously by default. You
+        can perform the call synchronously by setting the async_operation query
+        param to false.
       operationId: installInterface
       security:
         - JWT: []
+      parameters:
+        - name: async_operation
+          in: query
+          description: Whether the operation should be carried out asynchronously.
+          required: false
+          schema:
+            type: boolean
+            default: true
       responses:
         '201':
           $ref: '#/components/responses/InstallInterface'
@@ -168,14 +228,23 @@ paths:
       description: >-
         Replace an existing interface with a certain major version with a new
         one (that must have same major version and a higher minor version).
-        Server side validation is performed and the interface upgrade is
-        performed aynchronously. For more information about what is allowed when
-        updating an interface, see [the
-        doc](https://docs.astarte-platform.org/1.0/030-interface.html#versioning).
+        Server side validation is performed. Interface upgrade is performed
+        asynchronously by default. You can perform the call synchronously by
+        setting the async_operation query param to false. For more information
+        about what is allowed when updating an interface, see [the
+        doc](https://docs.astarte-platform.org/astarte/1.0/030-interface.html#versioning).
         This operation cannot be reverted.
       operationId: updateInterface
       security:
         - JWT: []
+      parameters:
+        - name: async_operation
+          in: query
+          description: Whether the operation should be carried out asynchronously.
+          required: false
+          schema:
+            type: boolean
+            default: true
       responses:
         '204':
           description: Success
@@ -218,10 +287,20 @@ paths:
       description: >-
         Delete an interface draft (a draft is an interface with major version
         0). An interface with a major version different than 0 should be
-        manually deleted.
+        manually deleted. Interface deletion is performed asynchronously by
+        default. You can perform the call synchronously by setting the
+        async_operation query param to false.
       operationId: deleteInterface
       security:
         - JWT: []
+      parameters:
+        - name: async_operation
+          in: query
+          description: Whether the operation should be carried out asynchronously.
+          required: false
+          schema:
+            type: boolean
+            default: true
       responses:
         '204':
           description: Success
@@ -266,6 +345,8 @@ paths:
       responses:
         '201':
           $ref: '#/components/responses/InstallTrigger'
+        '400':
+          description: Bad request
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -294,7 +375,9 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
         '404':
-          $ref: '#/components/responses/NotFound'
+          $ref: '#/components/responses/TriggerNotFound'
+        '500':
+          description: Internal Server Error.
     delete:
       tags:
         - trigger
@@ -314,7 +397,131 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
         '404':
+          $ref: '#/components/responses/TriggerNotFound'
+        '500':
+          description: Internal Server Error.
+  '/{realm_name}/policies':
+    parameters:
+      - $ref: '#/components/parameters/Realm'
+    get:
+      tags:
+        - policy
+      summary: Get trigger delivery policy list
+      description: >-
+        Get a list of all installed trigger delivery policies. The name for each
+        installed trigger delivery policy is reported.
+      operationId: getTriggerDeliveryPolicyList
+      security:
+        - JWT: []
+      responses:
+        '200':
+          $ref: '#/components/responses/GetTriggerDeliveryPolicyList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags:
+        - policy
+      summary: Install a trigger delivery policy configuration
+      description: >-
+        Install a new trigger delivery policy using provided configuration.
+        Trigger Delivery Policy validation is performed before installation.
+        If the trigger delivery policy configuration is not valid or a trigger
+        delivery policy with the same name already exists an error is reported.
+      operationId: installTriggerDeliveryPolicy
+      security:
+        - JWT: []
+      responses:
+        '201':
+          $ref: '#/components/responses/InstallTriggerDeliveryPolicy'
+        '400':
+          description: Bad request
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/TriggerDeliveryPolicyAlreadyInstalledError'
+        '422':
+          $ref: '#/components/responses/TriggerDeliveryPolicyValidationError'
+      requestBody:
+        $ref: '#/components/requestBodies/InstallTriggerDeliveryPolicy'
+  '/{realm_name}/policies/{policy_name}':
+    parameters:
+      - $ref: '#/components/parameters/Realm'
+      - $ref: '#/components/parameters/TriggerDeliveryPolicyName'
+    get:
+      tags:
+        - policy
+      summary: Get the trigger delivery policy configuration
+      description: Retrieve installed trigger delivery policy configuration.
+      operationId: getTriggerDeliveryPolicy
+      security:
+        - JWT: []
+      responses:
+        '200':
+          $ref: '#/components/responses/GetTriggerDeliveryPolicy'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/TriggerDeliveryPolicyNotFound'
+        '500':
+          description: Internal Server Error.
+    delete:
+      tags:
+        - policy
+      summary: Delete trigger delivery policy
+      description: >-
+        Deletes the trigger delivery policy with given `policy_name`.
+        An existing trigger delivery policy can be deleted only if there are no
+        triggers linking to it.
+      operationId: deleteTriggerDeliveryPolicy
+      security:
+        - JWT: []
+      responses:
+        '204':
+          description: Success
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/TriggerDeliveryPolicyNotFound'
+        '409':
+          $ref: '#/components/responses/TriggerDeliveryPolicyCurrentlyUsedError'
+        '500':
+          description: Internal Server Error.
+  '/{realm_name}/devices/{device_id}':
+    parameters:
+      - $ref: '#/components/parameters/Realm'
+      - $ref: '#/components/parameters/DeviceID'
+    delete:
+      tags:
+        - device
+      summary: Delete device
+      description: >-
+        Deletes an existing device with a given `device_id`.
+        Device deletion happens asynchronously, and receiving a 204 response
+        doesn't guarantee immediate deletion of the device.
+      operationId: deleteDevice
+      security:
+        - JWT: []
+      responses:
+        '204':
+          description: Success
+        '400':
+          description: Bad request
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          description: Internal Server Error.
 components:
   responses:
     ConfigValidationError:
@@ -334,7 +541,9 @@ components:
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/GenericError'
+            oneOf:
+              - $ref: '#/components/schemas/AuthorizationPathNotMatchedError'
+              - $ref: '#/components/schemas/GenericError'
           example:
             errors:
               detail: Forbidden
@@ -349,6 +558,28 @@ components:
             properties:
               data:
                 $ref: '#/components/schemas/AuthConfig'
+    GetDeviceRegistrationLimit:
+      description: Success
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - data
+            properties:
+              data:
+                $ref: '#/components/schemas/DeviceRegistrationLimit'
+    GetDatastreamMaximumStorageRetention:
+      description: Success
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - data
+            properties:
+              data:
+                $ref: '#/components/schemas/DatastreamMaximumStorageRetention'
     GetInterface:
       description: Success
       content:
@@ -415,6 +646,24 @@ components:
                   - type: device_trigger
                     'on': device_connected
                     device_id: glO6LullTKmwxebForU-eg
+    GetTriggerDeliveryPolicy:
+      description: Success
+      content:
+        application/json:
+          schema:
+            type: string
+            required:
+              - data
+            properties:
+              data:
+                $ref: '#/components/schemas/TriggerDeliveryPolicyConfig'
+            example:
+              data:
+                name: my_policy
+                maximum_capacity: 100
+                error_handlers:
+                  - 'on': any_error
+                    strategy: discard
     GetTriggerList:
       description: Success
       content:
@@ -433,6 +682,24 @@ components:
                 - new_data_on_test_interface
                 - connected_device
                 - value_above_threshold_alarm
+    GetTriggerDeliveryPolicyList:
+      description: Success
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - data
+            properties:
+              data:
+                type: array
+                items:
+                  type: string
+            example:
+              data:
+                - retry_on_all_errors_policy
+                - simple_policy
+                - discard_403_errors_policy
     InstallInterface:
       description: Interface installation succesfully started
       headers:
@@ -456,6 +723,22 @@ components:
             properties:
               data:
                 $ref: '#/components/schemas/TriggerConfig'
+    InstallTriggerDeliveryPolicy:
+      description: Success
+      headers:
+        Location:
+          description: URL of the installed trigger delivery policy
+          schema:
+            type: string
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - data
+            properties:
+              data:
+                $ref: '#/components/schemas/TriggerDeliveryPolicyConfig'
     InterfaceNotFound:
       description: Requested interface was not found
       content:
@@ -476,6 +759,15 @@ components:
               mappings:
                 type:
                   - is invalid
+    TriggerNotFound:
+      description: Requested trigger was not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/GenericError'
+          example:
+            errors:
+              detail: Trigger not found
     TriggerValidationError:
       description: The provided trigger configuration is not valid.
       content:
@@ -487,24 +779,61 @@ components:
               simple_triggers:
                 - device_id:
                     - is not a valid device_id
-    NotFound:
-      description: Resource not found
+    TriggerDeliveryPolicyAlreadyInstalledError:
+      description: A trigger delivery policy with this name already exists.
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/GenericError'
           example:
             errors:
-              detail: Not found
+              detail: Policy already exists
+    TriggerDeliveryPolicyCurrentlyUsedError:
+      description: The trigger delivery policy to delete is linked to one or more triggers.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/GenericError'
+          example:
+            errors:
+              detail: Cannot delete policy as it is being currently used by triggers
+    TriggerDeliveryPolicyValidationError:
+      description: The provided trigger delivery policy is not valid.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ValidationError'
+          example:
+            errors:
+              detail: is invalid
+    TriggerDeliveryPolicyNotFound:
+      description: Requested trigger delivery policy was not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/GenericError'
+          example:
+            errors:
+              detail: Trigger policy not found
     Unauthorized:
-      description: Authorization information is missing or invalid.
+      description: Token/Realm doesn't exist or operation not allowed.
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/GenericError'
-          example:
-            errors:
-              detail: Unauthorized
+            oneOf:
+              - $ref: '#/components/schemas/MissingTokenError'
+              - $ref: '#/components/schemas/InvalidTokenError'
+              - $ref: '#/components/schemas/InvalidAuthPathError'
+              - $ref: '#/components/schemas/GenericError'
+    AuthorizationPathNotMatched:
+      description: Authorization path not matched.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data:
+                $ref: '#/components/schemas/AuthorizationPathNotMatchedError'
     UpdateConflict:
       description: >-
         The updated interface is valid, but there's a conflict with the existing
@@ -516,6 +845,12 @@ components:
           example:
             errors:
               detail: Interface minor version was not increased
+    InternalServerError:
+      description: Internal Server Error.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/GenericError'
   securitySchemes:
     JWT:
       type: apiKey
@@ -540,6 +875,16 @@ components:
             properties:
               data:
                 $ref: '#/components/schemas/TriggerConfig'
+    InstallTriggerDeliveryPolicy:
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - data
+            properties:
+              data:
+                $ref: '#/components/schemas/TriggerDeliveryPolicyConfig'
     InstallInterface:
       content:
         application/json:
@@ -597,6 +942,13 @@ components:
       required: true
       schema:
         type: string
+    DeviceID:
+      name: device_id
+      in: path
+      description: Device ID
+      required: true
+      schema:
+        type: string
     InterfaceName:
       name: interface_name
       in: path
@@ -618,6 +970,13 @@ components:
       required: true
       schema:
         type: string
+    TriggerDeliveryPolicyName:
+      name: policy_name
+      in: path
+      description: Trigger delivery policy name
+      required: true
+      schema:
+        type: string
   schemas:
     AuthConfig:
       type: object
@@ -634,6 +993,14 @@ components:
             f9jgaxW4oQV85enS/OJrrC9jU11agRc4bDv1h4s2t+ETWb4llTVk3HMIHbC3EvKJ
             VwIDAQAB
             -----END PUBLIC KEY-----
+    DeviceRegistrationLimit:
+      type: integer
+      minimum: 0
+      example: 100
+    DatastreamMaximumStorageRetention:
+      type: integer
+      minimum: 1
+      example: 100
     Interface:
       type: object
       properties:
@@ -872,6 +1239,62 @@ components:
             match_path: /realValue
             value_match_operator: '>'
             known_value: 0.6
+    TriggerDeliveryPolicyConfig:
+      type: object
+      properties:
+        name:
+          description: Name of the trigger delivery policy.
+          type: string
+          pattern: >-
+            ^(?!@).+$
+          minLength: 1
+          maxLength: 128
+        maximum_capacity:
+          type: integer
+          description: Maximum size of the event queue of the trigger delivery policy.
+        error_handlers:
+          description: >-
+            Handlers for HTTP errors. Specify what action to take upon errors.
+          type: array
+          minLength: 1
+          maxLength: 200
+          items:
+            $ref: '#/components/schemas/TriggerDeliveryPolicyErrorHandler'
+        event_ttl:
+          type: integer
+          description: The amount of time (in milliseconds) an event will be retained in the event queue.
+        retry_times:
+          type: integer
+          description: The amount of times an event will be requeued if delivery fails and the related handler has 'retry' strategy.
+      required:
+        - name
+        - maximum_capacity
+        - error_handlers
+      example:
+        name: my_policy
+        maximum_capacity: 100
+        error_handlers:
+          - 'on': any_error
+            strategy: discard
+    TriggerDeliveryPolicyErrorHandler:
+      type: object
+      properties:
+        'on':
+          description: >-
+            The range of errors the handler refers to. Must be one of: 'any_error',
+            'client_error', 'server_error' or a custom error range (e.g. '[418, 419, 420, 500]').
+        strategy:
+          type: string
+          enum:
+          - discard
+          - retry
+          description: What Astarte must do if an HTTP error occurs when delivering errors the handler refers to.
+      required:
+        - 'on'
+        - strategy
+      example:
+        'on': any_error
+        strategy: discard
     HTTPPostAction:
       type: object
       description: >-
@@ -1011,3 +1434,50 @@ components:
       properties:
         errors:
           type: object
+    MissingTokenError:
+      type: object
+      properties:
+        errors:
+          type: object
+          properties:
+            detail:
+              type: string
+      example:
+        errors:
+          detail: Missing authorization token
+
+    InvalidTokenError:
+      type: object
+      properties:
+        errors:
+          type: object
+          properties:
+            detail:
+              type: string
+      example:
+        errors:
+          detail: Invalid JWT token
+
+    InvalidAuthPathError:
+      type: object
+      properties:
+        errors:
+          type: object
+          properties:
+            detail:
+              type: string
+      example:
+        errors:
+          detail: Authorization failed due to an invalid path
+
+    AuthorizationPathNotMatchedError:
+      type: object
+      properties:
+        errors:
+          type: object
+          properties:
+            detail:
+              type: string
+      example:
+        errors:
+          detail: Unauthorized access to GET /api/v1/some_path. Please verify your permissions

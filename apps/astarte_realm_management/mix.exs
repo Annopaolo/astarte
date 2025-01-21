@@ -1,7 +1,7 @@
 #
 # This file is part of Astarte.
 #
-# Copyright 2017-2021 Ispirata Srl
+# Copyright 2017 - 2023 SECO Mind Srl
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,8 +22,9 @@ defmodule Astarte.RealmManagement.Mixfile do
   def project do
     [
       app: :astarte_realm_management,
-      version: "1.1.0-dev",
-      elixir: "~> 1.10",
+      elixir: "~> 1.15",
+      version: "1.3.0-dev",
+      elixirc_paths: elixirc_paths(Mix.env()),
       build_embedded: Mix.env() == :prod,
       start_permanent: Mix.env() == :prod,
       test_coverage: [tool: ExCoveralls],
@@ -33,17 +34,20 @@ defmodule Astarte.RealmManagement.Mixfile do
         "coveralls.post": :test,
         "coveralls.html": :test
       ],
-      dialyzer_cache_directory: dialyzer_cache_directory(Mix.env()),
+      dialyzer: [plt_core_path: dialyzer_cache_directory(Mix.env())],
       deps: deps() ++ astarte_required_modules(System.get_env("ASTARTE_IN_UMBRELLA"))
     ]
   end
 
   def application do
     [
-      extra_applications: [:lager, :logger],
+      extra_applications: [:logger],
       mod: {Astarte.RealmManagement, []}
     ]
   end
+
+  defp elixirc_paths(:test), do: ["test/support", "lib"]
+  defp elixirc_paths(_), do: ["lib"]
 
   defp dialyzer_cache_directory(:ci) do
     "dialyzer_cache"
@@ -63,15 +67,15 @@ defmodule Astarte.RealmManagement.Mixfile do
 
   defp astarte_required_modules(_) do
     [
-      {:astarte_core, github: "astarte-platform/astarte_core"},
-      {:astarte_data_access, github: "astarte-platform/astarte_data_access"},
+      {:astarte_core, "~> 1.2"},
+      {:astarte_data_access, "~> 1.2"},
       {:astarte_rpc, github: "astarte-platform/astarte_rpc"}
     ]
   end
 
   defp deps do
     [
-      {:excoveralls, "~> 0.12", only: :test},
+      {:excoveralls, "~> 0.15", only: :test},
       {:pretty_log, "~> 0.1"},
       {:plug_cowboy, "~> 2.1"},
       {:jason, "~> 1.2"},
@@ -81,7 +85,10 @@ defmodule Astarte.RealmManagement.Mixfile do
       {:telemetry_poller, "~> 0.4"},
       {:xandra, "~> 0.13"},
       {:observer_cli, "~> 1.5"},
-      {:dialyzex, github: "Comcast/dialyzex", only: [:dev, :ci]}
+      {:dialyxir, "~> 1.0", only: [:dev, :ci], runtime: false},
+      # Workaround for Elixir 1.15 / ssl_verify_fun issue
+      # See also: https://github.com/deadtrickster/ssl_verify_fun.erl/pull/27
+      {:ssl_verify_fun, "~> 1.1.0", manager: :rebar3, override: true}
     ]
   end
 end

@@ -1,7 +1,7 @@
 #
 # This file is part of Astarte.
 #
-# Copyright 2019 Ispirata Srl
+# Copyright 2019-2023 SECO Mind Srl
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -40,6 +40,12 @@ defmodule Astarte.AppEngine.APIWeb.DeviceStatusByGroupControllerTest do
       "minor" => 0,
       "exchanged_msgs" => 4230,
       "exchanged_bytes" => 2_010_000
+    },
+    "com.example.ServerOwnedTestObject" => %{
+      "major" => 1,
+      "minor" => 0,
+      "exchanged_msgs" => 100,
+      "exchanged_bytes" => 30_000
     },
     "com.example.TestObject" => %{
       "major" => 1,
@@ -88,7 +94,8 @@ defmodule Astarte.AppEngine.APIWeb.DeviceStatusByGroupControllerTest do
     "total_received_bytes" => 4_500_000,
     "total_received_msgs" => 45000,
     "previous_interfaces" => @expected_previous_interfaces,
-    "groups" => [@group_name]
+    "groups" => [@group_name],
+    "deletion_in_progress" => false
   }
 
   setup_all do

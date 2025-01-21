@@ -1,7 +1,7 @@
 #
 # This file is part of Astarte.
 #
-# Copyright 2018 Ispirata Srl
+# Copyright 2018 - 2023 SECO Mind Srl
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -75,12 +75,12 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Queries do
       :ok
     else
       %{acc: _, msg: error_message} ->
-        Logger.warn("Database error: #{error_message}.")
+        Logger.warning("Database error: #{error_message}.")
         {:error, :database_error}
 
       {:error, reason} ->
         # DB Error
-        Logger.warn("Failed with reason #{inspect(reason)}.")
+        Logger.warning("Failed with reason #{inspect(reason)}.")
         {:error, :database_error}
     end
   end
@@ -98,7 +98,7 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Queries do
         _opts
       ) do
     if endpoint.allow_unset == false do
-      Logger.warn("Tried to unset value on allow_unset=false mapping.")
+      Logger.warning("Tried to unset value on allow_unset=false mapping.")
       # TODO: should we handle this situation?
     end
 
@@ -136,9 +136,7 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Queries do
       DatabaseQuery.new()
       |> DatabaseQuery.statement(
         "INSERT INTO #{interface_descriptor.storage} " <>
-          "(device_id, interface_id, endpoint_id, path, reception_timestamp, #{
-            CQLUtils.type_to_db_column_name(endpoint.value_type)
-          }) " <>
+          "(device_id, interface_id, endpoint_id, path, reception_timestamp, #{CQLUtils.type_to_db_column_name(endpoint.value_type)}) " <>
           "VALUES (:device_id, :interface_id, :endpoint_id, :path, :reception_timestamp, :value);"
       )
       |> DatabaseQuery.put(:device_id, device_id)
@@ -175,12 +173,8 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Queries do
       DatabaseQuery.new()
       |> DatabaseQuery.statement(
         "INSERT INTO #{interface_descriptor.storage} " <>
-          "(device_id, interface_id, endpoint_id, path, value_timestamp, reception_timestamp, reception_timestamp_submillis, #{
-            CQLUtils.type_to_db_column_name(endpoint.value_type)
-          }) " <>
-          "VALUES (:device_id, :interface_id, :endpoint_id, :path, :value_timestamp, :reception_timestamp, :reception_timestamp_submillis, :value) #{
-            ttl_string
-          };"
+          "(device_id, interface_id, endpoint_id, path, value_timestamp, reception_timestamp, reception_timestamp_submillis, #{CQLUtils.type_to_db_column_name(endpoint.value_type)}) " <>
+          "VALUES (:device_id, :interface_id, :endpoint_id, :path, :value_timestamp, :reception_timestamp, :reception_timestamp_submillis, :value) #{ttl_string};"
       )
       |> DatabaseQuery.put(:device_id, device_id)
       |> DatabaseQuery.put(:interface_id, interface_descriptor.interface_id)
@@ -258,7 +252,7 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Queries do
 
           {next_query_values_acc, next_placeholders_acc, next_query_acc}
         else
-          Logger.warn(
+          Logger.warning(
             "Unexpected object key #{inspect(obj_key)} with value #{inspect(obj_value)}."
           )
 
@@ -279,9 +273,7 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Queries do
       DatabaseQuery.new()
       |> DatabaseQuery.statement(
         "INSERT INTO #{interface_descriptor.storage} (device_id, path, #{query_columns} reception_timestamp, reception_timestamp_submillis) " <>
-          "VALUES (:device_id, :path, #{placeholders} :reception_timestamp, :reception_timestamp_submillis) #{
-            ttl_string
-          };"
+          "VALUES (:device_id, :path, #{placeholders} :reception_timestamp, :reception_timestamp_submillis) #{ttl_string};"
       )
       |> DatabaseQuery.put(:device_id, device_id)
       |> DatabaseQuery.put(:path, path)
@@ -388,7 +380,7 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Queries do
       :ok
     else
       {:error, reason} ->
-        Logger.warn("Error while upserting path: #{path} (reason: #{inspect(reason)}).")
+        Logger.warning("Error while upserting path: #{path} (reason: #{inspect(reason)}).")
         {:error, :database_error}
     end
   end
@@ -540,11 +532,11 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Queries do
         {:ok, 0}
 
       %{acc: _, msg: error_message} ->
-        Logger.warn("Database error: #{error_message}.")
+        Logger.warning("Database error: #{error_message}.")
         {:error, :database_error}
 
       {:error, reason} ->
-        Logger.warn("Database error while retrieving property: #{inspect(reason)}.")
+        Logger.warning("Database error while retrieving property: #{inspect(reason)}.")
         {:error, :database_error}
     end
   end
@@ -605,11 +597,11 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Queries do
         {:ok, %{}}
 
       %{acc: _, msg: error_message} ->
-        Logger.warn("Database error: #{error_message}.")
+        Logger.warning("Database error: #{error_message}.")
         {:error, :database_error}
 
       {:error, reason} ->
-        Logger.warn("Failed with reason #{inspect(reason)}.")
+        Logger.warning("Failed with reason #{inspect(reason)}.")
         {:error, :database_error}
     end
   end
@@ -635,11 +627,11 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Queries do
         {:ok, []}
 
       %{acc: _, msg: error_message} ->
-        Logger.warn("Database error: #{error_message}.", tag: "db_error")
+        Logger.warning("Database error: #{error_message}.", tag: "db_error")
         {:error, :database_error}
 
       {:error, reason} ->
-        Logger.warn("Failed with reason #{inspect(reason)}.", tag: "db_error")
+        Logger.warning("Failed with reason #{inspect(reason)}.", tag: "db_error")
         {:error, :database_error}
     end
   end
@@ -731,7 +723,7 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Queries do
       :ok
     else
       {:error, reason} ->
-        Logger.warn(
+        Logger.warning(
           "Database error: cannot register device-interface pair, reason: #{inspect(reason)}."
         )
 
@@ -759,11 +751,40 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Queries do
       :ok
     else
       {:error, reason} ->
-        Logger.warn(
+        Logger.warning(
           "Database error: cannot unregister device-interface pair: #{inspect(reason)}."
         )
 
         {:error, reason}
+    end
+  end
+
+  def check_device_exists(client, device_id) do
+    device_statement = """
+    SELECT device_id
+    FROM devices
+    WHERE device_id=:device_id
+    """
+
+    device_query =
+      DatabaseQuery.new()
+      |> DatabaseQuery.statement(device_statement)
+      |> DatabaseQuery.put(:device_id, device_id)
+
+    with {:ok, result} <- DatabaseQuery.call(client, device_query),
+         device_row when is_list(device_row) <- DatabaseResult.head(result) do
+      {:ok, true}
+    else
+      :empty_dataset ->
+        {:ok, false}
+
+      %{acc: _, msg: error_message} ->
+        _ = Logger.warning("Database error: #{error_message}.", tag: "db_error")
+        {:error, :database_error}
+
+      {:error, reason} ->
+        _ = Logger.warning("Database error, reason: #{inspect(reason)}.", tag: "db_error")
+        {:error, :database_error}
     end
   end
 
@@ -776,7 +797,8 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Queries do
     DateTime.to_unix(datetime, :millisecond)
   end
 
-  defp to_db_friendly_type({_subtype, bin}) do
+  # From Cyanide 2.0, binaries are decoded as %Cyanide.Binary{}
+  defp to_db_friendly_type(%Cyanide.Binary{subtype: _subtype, data: bin}) do
     bin
   end
 
@@ -818,9 +840,7 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Queries do
 
     # TODO: should we filter on path for performance reason?
     # TODO: probably we should sanitize also table_name: right now it is stored on database
-    "SELECT path, #{Astarte.Core.CQLUtils.type_to_db_column_name(value_type)} #{metadata_column} FROM #{
-      table_name
-    }" <>
+    "SELECT path, #{Astarte.Core.CQLUtils.type_to_db_column_name(value_type)} #{metadata_column} FROM #{table_name}" <>
       " WHERE device_id=:device_id AND interface_id=:interface_id AND endpoint_id=:endpoint_id;"
   end
 
@@ -871,11 +891,11 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Queries do
         {:ok, nil}
 
       %{acc: _, msg: error_message} ->
-        Logger.warn("Database error: #{error_message}.")
+        Logger.warning("Database error: #{error_message}.")
         {:error, :database_error}
 
       {:error, reason} ->
-        Logger.warn("Failed with reason: #{inspect(reason)}.")
+        Logger.warning("Failed with reason: #{inspect(reason)}.")
         {:error, :database_error}
     end
   end
@@ -916,12 +936,159 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Queries do
         {:ok, :no_expiry}
 
       %{acc: _, msg: error_message} ->
-        Logger.warn("Database error: #{error_message}.")
+        Logger.warning("Database error: #{error_message}.")
         {:error, :database_error}
 
       {:error, reason} ->
-        Logger.warn("Database error while retrieving property: #{inspect(reason)}.")
+        Logger.warning("Database error while retrieving property: #{inspect(reason)}.")
         {:error, :database_error}
     end
+  end
+
+  def ack_end_device_deletion(realm_name, device_id) do
+    Xandra.Cluster.run(
+      :xandra,
+      &do_ack_end_device_deletion(&1, realm_name, device_id)
+    )
+  end
+
+  defp do_ack_end_device_deletion(conn, realm_name, device_id) do
+    statement = """
+    UPDATE #{realm_name}.deletion_in_progress
+    SET dup_end_ack = true
+    WHERE device_id = :device_id
+    """
+
+    with {:ok, prepared} <- Xandra.prepare(conn, statement),
+         {:ok, %Xandra.Void{}} <-
+           Xandra.execute(conn, prepared, %{"device_id" => device_id}, uuid_format: :binary) do
+      :ok
+    else
+      {:error, %Xandra.Error{} = error} ->
+        _ =
+          Logger.warning(
+            "Database error while writing device deletion end ack: #{Exception.message(error)}"
+          )
+
+        {:error, :database_error}
+
+      {:error, %Xandra.ConnectionError{} = error} ->
+        _ =
+          Logger.warning(
+            "Database connection error while writing device deletion end ack: #{Exception.message(error)}"
+          )
+
+        {:error, :database_connection_error}
+    end
+  end
+
+  def ack_start_device_deletion(realm_name, device_id) do
+    Xandra.Cluster.run(
+      :xandra,
+      &do_ack_start_device_deletion(&1, realm_name, device_id)
+    )
+  end
+
+  defp do_ack_start_device_deletion(conn, realm_name, device_id) do
+    statement = """
+    UPDATE #{realm_name}.deletion_in_progress
+    SET dup_start_ack = true
+    WHERE device_id = :device_id
+    """
+
+    with {:ok, prepared} <- Xandra.prepare(conn, statement),
+         {:ok, %Xandra.Void{}} <-
+           Xandra.execute(conn, prepared, %{"device_id" => device_id}, uuid_format: :binary) do
+      :ok
+    else
+      {:error, %Xandra.Error{} = error} ->
+        _ =
+          Logger.warning(
+            "Database error while writing device deletion start ack: #{Exception.message(error)}"
+          )
+
+        {:error, :database_error}
+
+      {:error, %Xandra.ConnectionError{} = error} ->
+        _ =
+          Logger.warning(
+            "Database connection error while writing device deletion start ack: #{Exception.message(error)}"
+          )
+
+        {:error, :database_connection_error}
+    end
+  end
+
+  def check_device_deletion_in_progress(realm_name, device_id) do
+    Xandra.Cluster.run(
+      :xandra,
+      &do_check_device_deletion_in_progress(&1, realm_name, device_id)
+    )
+  end
+
+  defp do_check_device_deletion_in_progress(conn, realm_name, device_id) do
+    statement = """
+    SELECT *
+    FROM #{realm_name}.deletion_in_progress
+    WHERE device_id = :device_id
+    """
+
+    with {:ok, prepared} <- Xandra.prepare(conn, statement),
+         {:ok, %Xandra.Page{} = page} <-
+           Xandra.execute(conn, prepared, %{"device_id" => device_id}, uuid_format: :binary) do
+      result_not_empty? = not Enum.empty?(page)
+      {:ok, result_not_empty?}
+    else
+      {:error, %Xandra.Error{} = error} ->
+        _ =
+          Logger.warning(
+            "Database error while checking device deletion in progress: #{Exception.message(error)}"
+          )
+
+        {:error, :database_error}
+
+      {:error, %Xandra.ConnectionError{} = error} ->
+        _ =
+          Logger.warning(
+            "Database connection error while checking device deletion in progress: #{Exception.message(error)}"
+          )
+
+        {:error, :database_connection_error}
+    end
+  end
+
+  def retrieve_realms! do
+    statement = """
+    SELECT *
+    FROM #{CQLUtils.realm_name_to_keyspace_name("astarte", Config.astarte_instance_id!())}.realms
+    """
+
+    realms =
+      Xandra.Cluster.run(
+        :xandra,
+        &Xandra.execute!(&1, statement, %{}, consistency: :local_quorum)
+      )
+
+    Enum.to_list(realms)
+  end
+
+  def retrieve_devices_waiting_to_start_deletion!(realm_name) do
+    Xandra.Cluster.run(
+      :xandra,
+      &do_retrieve_devices_waiting_to_start_deletion!(&1, realm_name)
+    )
+  end
+
+  defp do_retrieve_devices_waiting_to_start_deletion!(conn, realm_name) do
+    statement = """
+    SELECT *
+    FROM #{realm_name}.deletion_in_progress
+    """
+
+    Xandra.execute!(conn, statement, %{},
+      consistency: :local_quorum,
+      uuid_format: :binary
+    )
+    |> Enum.to_list()
   end
 end

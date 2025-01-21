@@ -24,17 +24,27 @@ defmodule Astarte.RealmManagement.APIWeb.InterfaceController do
 
   action_fallback Astarte.RealmManagement.APIWeb.FallbackController
 
-  plug Astarte.RealmManagement.APIWeb.Plug.LogRealm
-  plug Astarte.RealmManagement.APIWeb.Plug.AuthorizePath
+  def index(conn, %{"realm_name" => realm_name} = params) do
+    detailed = Map.get(params, "detailed") == "true"
 
-  def index(conn, %{"realm_name" => realm_name}) do
-    with {:ok, interfaces} <- Astarte.RealmManagement.API.Interfaces.list_interfaces(realm_name) do
-      render(conn, "index.json", interfaces: interfaces)
+    with {:ok, interfaces} <- Interfaces.list_interfaces(realm_name, %{"detailed" => detailed}) do
+      interface_list = if detailed, do: Enum.map(interfaces, &Jason.decode!/1), else: interfaces
+      render(conn, "index.json", interfaces: interface_list)
     end
   end
 
-  def create(conn, %{"realm_name" => realm_name, "data" => %{} = params}) do
-    with {:ok, %Interface{} = interface} <- Interfaces.create_interface(realm_name, params) do
+  def create(conn, %{"realm_name" => realm_name, "data" => %{} = interface_params} = params) do
+    async_operation =
+      if Map.get(params, "async_operation") == "false" do
+        false
+      else
+        true
+      end
+
+    with {:ok, %Interface{} = interface} <-
+           Interfaces.create_interface(realm_name, interface_params,
+             async_operation: async_operation
+           ) do
       location =
         interface_path(
           conn,
@@ -79,15 +89,27 @@ defmodule Astarte.RealmManagement.APIWeb.InterfaceController do
     end
   end
 
-  def update(conn, %{
-        "realm_name" => realm_name,
-        "id" => interface_name,
-        "major_version" => major_version,
-        "data" => %{} = params
-      }) do
+  def update(
+        conn,
+        %{
+          "realm_name" => realm_name,
+          "id" => interface_name,
+          "major_version" => major_version,
+          "data" => %{} = interface_params
+        } = params
+      ) do
+    async_operation =
+      if Map.get(params, "async_operation") == "false" do
+        false
+      else
+        true
+      end
+
     with {:major_parsing, {parsed_major, ""}} <- {:major_parsing, Integer.parse(major_version)},
-         {:ok, :started} <-
-           Interfaces.update_interface(realm_name, interface_name, parsed_major, params) do
+         :ok <-
+           Interfaces.update_interface(realm_name, interface_name, parsed_major, interface_params,
+             async_operation: async_operation
+           ) do
       send_resp(conn, :no_content, "")
     else
       {:major_parsing, _} ->
@@ -141,18 +163,29 @@ defmodule Astarte.RealmManagement.APIWeb.InterfaceController do
     end
   end
 
-  def delete(conn, %{
-        "realm_name" => realm_name,
-        "id" => interface_name,
-        "major_version" => major_version
-      }) do
+  def delete(
+        conn,
+        %{
+          "realm_name" => realm_name,
+          "id" => interface_name,
+          "major_version" => major_version
+        } = params
+      ) do
     {parsed_major, ""} = Integer.parse(major_version)
 
-    with {:ok, :started} <-
+    async_operation =
+      if Map.get(params, "async_operation") == "false" do
+        false
+      else
+        true
+      end
+
+    with :ok <-
            Interfaces.delete_interface(
              realm_name,
              interface_name,
-             parsed_major
+             parsed_major,
+             async_operation: async_operation
            ) do
       send_resp(conn, :no_content, "")
     else

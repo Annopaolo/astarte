@@ -1,7 +1,7 @@
 #
 # This file is part of Astarte.
 #
-# Copyright 2017-2018 Ispirata Srl
+# Copyright 2017-2023 SECO Mind Srl
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -62,13 +62,14 @@ defmodule Astarte.Housekeeping.API.Realms do
       {:error, ...}
 
   """
-  def create_realm(attrs \\ %{}) do
+  def create_realm(attrs \\ %{}, opts \\ []) do
     changeset =
       %Realm{}
       |> Realm.changeset(attrs)
 
-    with {:ok, %Realm{} = realm} <- Ecto.Changeset.apply_action(changeset, :insert) do
-      case Housekeeping.create_realm(realm) do
+    with {:ok, %Realm{} = realm} <-
+           Ecto.Changeset.apply_action(changeset, :insert) do
+      case Housekeeping.create_realm(realm, opts) do
         :ok -> {:ok, realm}
         {:ok, :started} -> {:ok, realm}
         {:error, reason} -> {:error, reason}
@@ -77,19 +78,18 @@ defmodule Astarte.Housekeeping.API.Realms do
   end
 
   @doc """
-  Updates a realm.
-
-  ## Examples
-
-      iex> update_realm(realm, %{field: new_value})
-      {:ok, %Realm{}}
-
-      iex> update_realm(realm, %{field: bad_value})
-      {:error, ...}
-
+  Updates a realm with the provided list of attributes.
+  Returns either {:ok, %Realm{}} or {:error, error}
+  where `error` is an Ecto.Changeset describing the error.
   """
-  def update_realm(%Realm{} = _realm, _attrs) do
-    raise "TODO"
+  @spec update_realm(binary(), map()) :: {:ok, Realm.t()} | {:error, Ecto.Changeset.t()}
+  def update_realm(realm_name, attrs) do
+    changeset = %Realm{realm_name: realm_name} |> Realm.update_changeset(attrs)
+
+    with {:ok, %Realm{} = realm_update} <-
+           Ecto.Changeset.apply_action(changeset, :update) do
+      Housekeeping.update_realm(realm_update)
+    end
   end
 
   @doc """
@@ -104,8 +104,8 @@ defmodule Astarte.Housekeeping.API.Realms do
       {:error, ...}
 
   """
-  def delete_realm(realm_name) do
-    case Housekeeping.delete_realm(realm_name) do
+  def delete_realm(realm_name, opts \\ []) do
+    case Housekeeping.delete_realm(realm_name, opts) do
       :ok -> :ok
       {:ok, :started} -> :ok
       {:error, reason} -> {:error, reason}

@@ -11,7 +11,7 @@ servers:
           standard Astarte installation, it is most likely `https://<your host>/pairing`.
 info:
   description: 'Control device registration, authentication an authorization'
-  version: 1.0.0
+  version: 1.3.0-dev
   title: Astarte Pairing API
   contact:
     email: info@ispirata.com
@@ -20,12 +20,12 @@ tags:
     description: Device registration and credentials secret emission
     externalDocs:
       description: Find out more
-      url: 'https://docs.astarte-platform.org/1.0/050-pairing_mechanism.html'
+      url: 'https://docs.astarte-platform.org/astarte/1.0/050-pairing_mechanism.html'
   - name: device
     description: Device credentials emission and info
     externalDocs:
       description: Find out more
-      url: 'https://docs.astarte-platform.org/1.0/050-pairing_mechanism.html'
+      url: 'https://docs.astarte-platform.org/astarte/1.0/050-pairing_mechanism.html'
 paths:
   '/{realm_name}/agent/devices':
     post:
@@ -63,17 +63,15 @@ paths:
                     data:
                       credentials_secret: TTkd5OgB13X/3qU0LXU7OCxyTXz5QHM2NY1IgidtPOs=
         '401':
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/UnauthorizedResponse'
+          $ref: '#/components/responses/Unauthorized'
         '403':
-          description: Forbidden
+          description: Forbidden or Authorization path not matched
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ForbiddenResponse'
+                oneOf:
+                  - $ref: '#/components/schemas/ForbiddenResponse'
+                  - $ref: '#/components/schemas/AuthorizationPathNotMatchedResponse'
         '422':
           description: Unprocessable entity
           content:
@@ -135,17 +133,15 @@ paths:
         '204':
           description: Device unregistered
         '401':
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/UnauthorizedResponse'
+          $ref: '#/components/responses/Unauthorized'
         '403':
-          description: Forbidden
+          description: Forbidden or Authorization path not matched
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ForbiddenResponse'
+                oneOf:
+                  - $ref: '#/components/schemas/ForbiddenResponse'
+                  - $ref: '#/components/schemas/AuthorizationPathNotMatchedResponse'
         '404':
           description: Device not found
           content:
@@ -198,17 +194,15 @@ paths:
                         astarte_mqtt_v1:
                           broker_url: 'ssl://broker.astarte.example.com:8883'
         '401':
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/UnauthorizedResponse'
+          $ref: '#/components/responses/Unauthorized'
         '403':
-          description: Forbidden
+          description: Forbidden or Authorization path not matched
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ForbiddenResponse'
+                oneOf:
+                  - $ref: '#/components/schemas/ForbiddenResponse'
+                  - $ref: '#/components/schemas/AuthorizationPathNotMatchedResponse'
   '/{realm_name}/devices/{hw_id}/protocols/astarte_mqtt_v1/credentials':
     post:
       tags:
@@ -244,7 +238,7 @@ paths:
                 response:
                   value:
                     data:
-                      client_certificate: >
+                      client_crt: >
                         -----BEGIN CERTIFICATE-----
                         MIIFfzCCA2egAwIBAgIJALsySXafOY1aMA0GCSqGSIb3DQEBCwUAMFYxCzAJBgNV
                         BAYTAklUMRAwDgYDVQQIDAdFeGFtcGxlMSEwHwYDVQQKDBhJbnRlcm5ldCBXaWRn
@@ -278,17 +272,15 @@ paths:
                         ySj0xif2Z8U7MTfhmZs1cyDA/A==
                         -----END CERTIFICATE-----
         '401':
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/UnauthorizedResponse'
+          $ref: '#/components/responses/Unauthorized'
         '403':
-          description: Forbidden
+          description: Forbidden or Authorization path not matched
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ForbiddenResponse'
+                oneOf:
+                  - $ref: '#/components/schemas/ForbiddenResponse'
+                  - $ref: '#/components/schemas/AuthorizationPathNotMatchedResponse'
         '422':
           description: Unprocessable entity
           content:
@@ -364,23 +356,26 @@ paths:
                     $ref: >-
                       #/components/schemas/AstarteMQTTV1VerifyCredentialsResponse
               examples:
-                response:
+                response valid certificate:
+                  value:
+                    data:
+                      valid: true
+                      until: 2025-03-25 19:25:00.000Z
+                response invalid certificate:
                   value:
                     data:
                       valid: false
                       cause: INVALID_ISSUER
         '401':
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/UnauthorizedResponse'
+          $ref: '#/components/responses/Unauthorized'
         '403':
-          description: Forbidden
+          description: Forbidden or Authorization path not matched
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ForbiddenResponse'
+                oneOf:
+                  - $ref: '#/components/schemas/ForbiddenResponse'
+                  - $ref: '#/components/schemas/AuthorizationPathNotMatchedResponse'
         '422':
           description: Unprocessable entity
           content:
@@ -403,7 +398,7 @@ paths:
                   $ref: '#/components/schemas/AstarteMQTTV1VerifyCredentialsRequest'
               example:
                 data:
-                  client_certificate: >
+                  client_crt: >
                     -----BEGIN CERTIFICATE-----
                     MIIFfzCCA2egAwIBAgIJALsySXafOY1aMA0GCSqGSIb3DQEBCwUAMFYxCzAJBgNV
                     BAYTAklUMRAwDgYDVQQIDAdFeGFtcGxlMSEwHwYDVQQKDBhJbnRlcm5ldCBXaWRn
@@ -460,6 +455,26 @@ components:
 
         The following syntax must be used in the 'Authorization' header :
           Bearer xxxxxxxxxxxxxxxxxxxxx
+  responses:
+    Unauthorized:
+      description: Token/Realm doesn't exist or operation not allowed.
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: '#/components/schemas/MissingTokenResponse'
+              - $ref: '#/components/schemas/InvalidTokenResponse'
+              - $ref: '#/components/schemas/InvalidAuthPathResponse'
+              - $ref: '#/components/schemas/UnauthorizedResponse'
+    AuthorizationPathNotMatched:
+      description: Authorization path not matched.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data:
+                $ref: '#/components/schemas/AuthorizationPathNotMatchedResponse'
   schemas:
     DeviceRegistrationRequest:
       type: object
@@ -510,8 +525,6 @@ components:
           type: string
         protocols:
           type: object
-    CredentialsObject:
-      type: object
     AstarteMQTTV1CredentialsRequest:
       type: object
       properties:
@@ -525,10 +538,8 @@ components:
     AstarteMQTTV1VerifyCredentialsRequest:
       type: object
       properties:
-        purpose:
+        client_crt:
           type: string
-        credentials:
-          $ref: '#/components/schemas/CredentialsObject'
     AstarteMQTTV1VerifyCredentialsResponse:
       type: object
       properties:
@@ -577,3 +588,50 @@ components:
       example:
         errors:
           detail: Unauthorized
+    MissingTokenResponse:
+      type: object
+      properties:
+        errors:
+          type: object
+          properties:
+            detail:
+              type: string
+      example:
+        errors:
+          detail: Missing authorization token
+
+    InvalidTokenResponse:
+      type: object
+      properties:
+        errors:
+          type: object
+          properties:
+            detail:
+              type: string
+      example:
+        errors:
+          detail: Invalid JWT token
+
+    InvalidAuthPathResponse:
+      type: object
+      properties:
+        errors:
+          type: object
+          properties:
+            detail:
+              type: string
+      example:
+        errors:
+          detail: Authorization failed due to an invalid path
+
+    AuthorizationPathNotMatchedResponse:
+      type: object
+      properties:
+        errors:
+          type: object
+          properties:
+            detail:
+              type: string
+      example:
+        errors:
+          detail: Unauthorized access to GET /api/v1/some_path. Please verify your permissions

@@ -16,7 +16,7 @@
 # limitations under the License.
 #
 
-use Mix.Config
+import Config
 
 config :astarte_rpc, :amqp_connection, host: System.get_env("RABBITMQ_HOST") || "rabbitmq"
 
@@ -25,6 +25,8 @@ config :astarte_pairing, :broker_url, "mqtts://broker.beta.astarte.cloud:8883/"
 config :astarte_pairing,
        :cfssl_url,
        System.get_env("CFSSL_API_URL") || "http://ispirata-docker-alpine-cfssl-autotest:8080"
+
+config :astarte_pairing, :astarte_instance_id, "test"
 
 config :bcrypt_elixir,
   log_rounds: 4

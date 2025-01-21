@@ -90,7 +90,7 @@ series in the database, making them suitable for time span filtering and any oth
 series operation, and they are not idempotent in the REST API semantics.
 
 Due to their nature, `datastream` interfaces have a number of [additional
-properties](#datastream-specific features) which fine tune their behavior.
+properties](#datastream-specific-features) which fine tune their behavior.
 
 ### Properties
 
@@ -163,6 +163,8 @@ Make sure that the differences between two distinct interface names are not limi
 the presence of hyphens. This situation leads to a collision in the interface names which brings to
 an error in the interface installation process.
 
+### Limitations
+
 A valid interface must resolve a path univocally to a single endpoint. Take the following example:
 
 ```json
@@ -219,6 +221,14 @@ of a valid aggregated interface mapping:
         },
     [...]
 ```
+
+Additional limitations (which stem from the MQTT protocol specification) can be outlined. When using
+parametric endpoints, the actual values used in place of parameter placeholders must fulfill the
+following requirements:
+* endpoint parameters must be non-empty UTF-8 encoded strings;
+* endpoint parameters must not contain the following characters: `+` and `#`. Those characters are
+  treated as wildcards for MQTT topics and therefore must be avoided;
+* endpoint parameters must not contain the `/` character.
 
 ## Aggregation
 
@@ -295,7 +305,7 @@ transferred and indexed. The following properties can be set at mapping level.
   whether data should be considered delivered when the transport successfully sends the data
   regardless of the outcome (`unreliable`), when data has been received at least once by the
   recipient (`guaranteed`) or when data has been received exactly once by the recipient (`unique`).
-  When using `reliable` data, consider you might incur in additional resource usage on both the
+  When using reliable data, consider you might incur in additional resource usage on both the
   transport and the device's end.
 * `retention`: Each mapping can have a `discard` (default), `volatile`, `stored` retention. This
   defines whether data should be discarded if the transport is temporarily uncapable of delivering

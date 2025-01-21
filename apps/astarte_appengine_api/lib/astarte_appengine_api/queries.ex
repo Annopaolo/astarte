@@ -18,6 +18,8 @@
 defmodule Astarte.AppEngine.API.Queries do
   alias CQEx.Query, as: DatabaseQuery
   alias CQEx.Result, as: DatabaseResult
+  alias Astarte.AppEngine.API.Config
+  alias Astarte.Core.CQLUtils
 
   require Logger
 
@@ -42,28 +44,45 @@ defmodule Astarte.AppEngine.API.Queries do
   end
 
   def check_astarte_health(client, consistency) do
-    realms_count_statement = """
-    SELECT COUNT(*)
-    FROM astarte.realms
+    schema_statement = """
+      SELECT count(value)
+      FROM #{CQLUtils.realm_name_to_keyspace_name("astarte", Config.astarte_instance_id!())}.kv_store
+      WHERE group='astarte' AND key='schema_version'
     """
 
-    realms_count_statement =
+    # no-op, just to check if nodes respond
+    # no realm name can contain '_', '^'
+    realms_statement = """
+      SELECT *
+      FROM #{CQLUtils.realm_name_to_keyspace_name("astarte", Config.astarte_instance_id!())}.realms
+      WHERE realm_name='_invalid^name_'
+    """
+
+    schema_query =
       DatabaseQuery.new()
-      |> DatabaseQuery.statement(realms_count_statement)
+      |> DatabaseQuery.statement(schema_statement)
       |> DatabaseQuery.consistency(consistency)
 
-    with {:ok, result} <- DatabaseQuery.call(client, realms_count_statement),
-         [count: _count] <- DatabaseResult.head(result) do
+    realms_query =
+      DatabaseQuery.new()
+      |> DatabaseQuery.statement(realms_statement)
+      |> DatabaseQuery.consistency(consistency)
+
+    with {:ok, result} <- DatabaseQuery.call(client, schema_query),
+         ["system.count(value)": _count] <- DatabaseResult.head(result),
+         {:ok, _result} <- DatabaseQuery.call(client, realms_query) do
       :ok
     else
       %{acc: _, msg: err_msg} ->
-        _ = Logger.warn("Health is not good: #{err_msg}.", tag: "db_health_check_bad")
+        _ = Logger.warning("Health is not good: #{err_msg}.", tag: "db_health_check_bad")
 
         {:error, :health_check_bad}
 
       {:error, err} ->
         _ =
-          Logger.warn("Health is not good, reason: #{inspect(err)}.", tag: "db_health_check_bad")
+          Logger.warning("Health is not good, reason: #{inspect(err)}.",
+            tag: "db_health_check_bad"
+          )
 
         {:error, :health_check_bad}
     end

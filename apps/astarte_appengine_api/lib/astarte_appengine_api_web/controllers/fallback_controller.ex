@@ -1,7 +1,7 @@
 #
 # This file is part of Astarte.
 #
-# Copyright 2017 Ispirata Srl
+# Copyright 2017-2023 SECO Mind Srl
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -34,9 +34,9 @@ defmodule Astarte.AppEngine.APIWeb.FallbackController do
 
   def call(conn, {:error, :cannot_write_to_device_owned}) do
     conn
-    |> put_status(:forbidden)
+    |> put_status(:method_not_allowed)
     |> put_view(Astarte.AppEngine.APIWeb.ErrorView)
-    |> render(:"403_cannot_write_to_device_owned.json")
+    |> render(:"405_cannot_write_to_device_owned")
   end
 
   def call(conn, {:error, :device_not_found}) do
@@ -125,9 +125,9 @@ defmodule Astarte.AppEngine.APIWeb.FallbackController do
 
   def call(conn, {:error, :read_only_resource}) do
     conn
-    |> put_status(:forbidden)
+    |> put_status(:method_not_allowed)
     |> put_view(Astarte.AppEngine.APIWeb.ErrorView)
-    |> render(:"403_read_only_resource.json")
+    |> render(:"405_read_only_resource")
   end
 
   def call(conn, {:error, :unauthorized}) do
@@ -197,11 +197,46 @@ defmodule Astarte.AppEngine.APIWeb.FallbackController do
     |> render(:"422_invalid_attributes")
   end
 
-  # This is called when no JWT token is present
-  def auth_error(conn, {:unauthenticated, reason}, _opts) do
-    _ =
-      Logger.info("Refusing unauthenticated request: #{inspect(reason)}.", tag: "unauthenticated")
+  def call(conn, {:error, :unexpected_object_key}) do
+    conn
+    |> put_status(:bad_request)
+    |> put_view(Astarte.AppEngine.APIWeb.ErrorView)
+    |> render(:"422_unexpected_object_key")
+  end
 
+  # Invalid authorized path
+  def call(conn, {:error, :invalid_auth_path}) do
+    conn
+    |> put_status(:unauthorized)
+    |> put_view(Astarte.AppEngine.APIWeb.ErrorView)
+    |> render(:invalid_auth_path)
+  end
+
+  # This is called when no JWT token is present
+  def auth_error(conn, {:unauthenticated, :unauthenticated}, _opts) do
+    conn
+    |> put_status(:unauthorized)
+    |> put_view(Astarte.AppEngine.APIWeb.ErrorView)
+    |> render(:missing_token)
+  end
+
+  # Invalid JWT token
+  def auth_error(conn, {:invalid_token, :invalid_token}, _opts) do
+    conn
+    |> put_status(:unauthorized)
+    |> put_view(Astarte.AppEngine.APIWeb.ErrorView)
+    |> render(:invalid_token)
+  end
+
+  # Path not authorized
+  def auth_error(conn, {:unauthorized, :authorization_path_not_matched}, _opts) do
+    conn
+    |> put_status(:forbidden)
+    |> put_view(Astarte.AppEngine.APIWeb.ErrorView)
+    |> render(:authorization_path_not_matched, %{method: conn.method, path: conn.request_path})
+  end
+
+  def auth_error(conn, {:unauthenticated, _reason}, _opts) do
     conn
     |> put_status(:unauthorized)
     |> put_view(Astarte.AppEngine.APIWeb.ErrorView)

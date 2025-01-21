@@ -1,7 +1,7 @@
 #
 # This file is part of Astarte.
 #
-# Copyright 2017 Ispirata Srl
+# Copyright 2017-2023 SECO Mind Srl
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -41,6 +41,12 @@ defmodule Astarte.AppEngine.API.DeviceTest do
       minor: 0,
       exchanged_msgs: 4230,
       exchanged_bytes: 2_010_000
+    },
+    "com.example.ServerOwnedTestObject" => %InterfaceInfo{
+      major: 1,
+      minor: 0,
+      exchanged_msgs: 100,
+      exchanged_bytes: 30_000
     },
     "com.example.TestObject" => %InterfaceInfo{
       major: 1,
@@ -140,7 +146,8 @@ defmodule Astarte.AppEngine.API.DeviceTest do
     total_received_bytes: 4_500_000,
     total_received_msgs: 45000,
     previous_interfaces: @expected_previous_interfaces,
-    groups: []
+    groups: [],
+    deletion_in_progress: false
   }
 
   setup do
@@ -162,6 +169,7 @@ defmodule Astarte.AppEngine.API.DeviceTest do
 
     assert Enum.sort(result) == [
              "com.example.PixelsConfiguration",
+             "com.example.ServerOwnedTestObject",
              "com.example.TestObject",
              "com.test.LCDMonitor",
              "com.test.SimpleStreamTest"
@@ -243,21 +251,25 @@ defmodule Astarte.AppEngine.API.DeviceTest do
              %{}
            ) == {:error, :endpoint_not_found}
 
-    assert Device.get_interface_values!(
-             "autotestrealm",
-             "f0VMRgIBAQAAAAAAAAAAAA",
-             "com.test.LCDMonitor",
-             "weekSchedule/9/start",
-             %{}
-           ) == {:error, :path_not_found}
+    assert unpack_interface_values(
+             Device.get_interface_values!(
+               "autotestrealm",
+               "f0VMRgIBAQAAAAAAAAAAAA",
+               "com.test.LCDMonitor",
+               "weekSchedule/9/start",
+               %{}
+             )
+           ) == %{}
 
-    assert Device.get_interface_values!(
-             "autotestrealm",
-             "f0VMRgIBAQAAAAAAAAAAAA",
-             "com.test.LCDMonitor",
-             "weekSchedule/9",
-             %{}
-           ) == {:error, :path_not_found}
+    assert unpack_interface_values(
+             Device.get_interface_values!(
+               "autotestrealm",
+               "f0VMRgIBAQAAAAAAAAAAAA",
+               "com.test.LCDMonitor",
+               "weekSchedule/9",
+               %{}
+             )
+           ) == %{}
   end
 
   test "get_interface_values! returns interfaces values on individual datastream interface" do
@@ -1310,6 +1322,24 @@ defmodule Astarte.AppEngine.API.DeviceTest do
              ) == {:error, :unexpected_value_type, expected: :boolean}
     end
 
+    test "fails with unexpected key" do
+      test_realm = "autotestrealm"
+      device_id = "fmloLzG5T5u0aOUfIkL8KA"
+      interface = "org.astarte-platform.genericsensors.ServerOwnedAggregateObj"
+      path = "/my_path"
+      value = %{"enable" => true, "samplingPeriod" => 10, "invalidKey" => true}
+      par = nil
+
+      assert Device.update_interface_values(
+               test_realm,
+               device_id,
+               interface,
+               path,
+               value,
+               par
+             ) == {:error, :unexpected_object_key}
+    end
+
     test "fails with invalid path" do
       test_realm = "autotestrealm"
       device_id = "fmloLzG5T5u0aOUfIkL8KA"
@@ -1434,12 +1464,12 @@ defmodule Astarte.AppEngine.API.DeviceTest do
                 data: %{
                   "my_new_path" => %{
                     "enable" => false,
-                    "samplingPeriod" => 100.0,
+                    "samplingPeriod" => 100,
                     "timestamp" => time1
                   },
                   "my_path" => %{
                     "enable" => true,
-                    "samplingPeriod" => 10.0,
+                    "samplingPeriod" => 10,
                     "timestamp" => time2
                   }
                 },
@@ -1448,6 +1478,52 @@ defmodule Astarte.AppEngine.API.DeviceTest do
 
       assert_in_delta(DateTime.to_unix(request_ts_1), DateTime.to_unix(time1), 1000)
       assert_in_delta(DateTime.to_unix(request_ts_2), DateTime.to_unix(time2), 1000)
+    end
+
+    test "is successful with binaryblob arrays in object-aggregated payloads and data on the interface can be retrieved" do
+      test_realm = "autotestrealm"
+      device_id = "fmloLzG5T5u0aOUfIkL8KA"
+      interface = "org.astarte-platform.genericsensors.ServerOwnedAggregateObj"
+      path = "/my_path"
+      values = [<<1, 2, 3, 230>>, <<4, 5, 6, 230>>]
+      server_owned_value = %{"binaryblobarray" => Enum.map(values, &Base.encode64/1)}
+      par = nil
+
+      MockRPCClient
+      |> expect(:rpc_call, fn serialized_call, _destination ->
+        assert %Call{call: {:publish, %Publish{} = publish_call}} = Call.decode(serialized_call)
+
+        encoded_payload =
+          %{v: %{"binaryblobarray" => Enum.map(values, &{0, &1})}} |> Cyanide.encode!()
+
+        path_tokens = String.split(path, "/")
+
+        assert %Publish{
+                 topic_tokens: [^test_realm, ^device_id, ^interface | ^path_tokens],
+                 payload: ^encoded_payload,
+                 qos: 2
+               } = publish_call
+
+        {:ok,
+         %Reply{
+           reply: tagged_publish_reply(1)
+         }
+         |> Reply.encode()}
+      end)
+
+      assert Device.update_interface_values(
+               test_realm,
+               device_id,
+               interface,
+               path,
+               server_owned_value,
+               par
+             ) ==
+               {:ok,
+                %Astarte.AppEngine.API.Device.InterfaceValues{
+                  data: server_owned_value,
+                  metadata: nil
+                }}
     end
 
     test "is successful when PublishReply contains a remote_match or multiple matches" do
@@ -1542,12 +1618,12 @@ defmodule Astarte.AppEngine.API.DeviceTest do
                 data: %{
                   "my_new_path" => %{
                     "enable" => false,
-                    "samplingPeriod" => 100.0,
+                    "samplingPeriod" => 100,
                     "timestamp" => time1
                   },
                   "my_path" => %{
                     "enable" => true,
-                    "samplingPeriod" => 10.0,
+                    "samplingPeriod" => 10,
                     "timestamp" => time2
                   }
                 },
@@ -1742,6 +1818,9 @@ defmodule Astarte.AppEngine.API.DeviceTest do
              {:ok, <<12, 172, 90, 121, 159, 75, 205, 70, 75, 207, 181, 143, 77, 48, 4, 0>>}
 
     assert Device.device_alias_to_device_id("autotestrealm", "device_e") ==
+             {:ok, <<122, 19, 105, 108, 245, 109, 67, 96, 156, 116, 151, 73, 43, 116, 20, 148>>}
+
+    assert Device.device_alias_to_device_id("autotestrealm", "device_f") ==
              {:error, :device_not_found}
   end
 
@@ -1987,6 +2066,7 @@ defmodule Astarte.AppEngine.API.DeviceTest do
       "4UQbIokuRufdtbVZt9AsLg",
       "DKxaeZ9LzUZLz7WPTTAEAA",
       "aWag-VlVKC--1S-vfzZ9uQ",
+      "ehNpbPVtQ2CcdJdJK3QUlA",
       "f0VMRgIBAQAAAAAAAAAAAA",
       "olFkumNuZ_J0f_d6-8XCDg"
     ]
@@ -2011,10 +2091,13 @@ defmodule Astarte.AppEngine.API.DeviceTest do
 
         "olFkumNuZ_J0f_d6-8XCDg" ->
           assert device.total_received_bytes == 10
+
+        "ehNpbPVtQ2CcdJdJK3QUlA" ->
+          assert device.deletion_in_progress == true
       end
     end
 
-    assert length(devices_with_details) == 5
+    assert length(devices_with_details) == 6
   end
 
   defp retrieve_next_devices_list(
@@ -2048,6 +2131,18 @@ defmodule Astarte.AppEngine.API.DeviceTest do
   test "get_device_status!/2 returns the device_status with given id" do
     assert Device.get_device_status!("autotestrealm", @expected_device_status.id) ==
              {:ok, @expected_device_status}
+  end
+
+  test "get_device_status!/2 returns the device_status with correct deletion_in_progress value" do
+    deleted_device_id = "ehNpbPVtQ2CcdJdJK3QUlA"
+
+    assert {:ok, deleted_device_status} =
+             Device.get_device_status!("autotestrealm", deleted_device_id)
+
+    assert %{
+             id: ^deleted_device_id,
+             deletion_in_progress: true
+           } = deleted_device_status
   end
 
   defp unpack_interface_values({:ok, %InterfaceValues{data: values}}) do

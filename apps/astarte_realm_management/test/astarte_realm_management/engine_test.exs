@@ -1,7 +1,7 @@
 #
 # This file is part of Astarte.
 #
-# Copyright 2017,2018 Ispirata Srl
+# Copyright 2017 - 2023 SECO Mind Srl
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,9 +20,14 @@ defmodule Astarte.RealmManagement.EngineTest do
   use ExUnit.Case
   require Logger
   alias Astarte.Core.CQLUtils
+  alias Astarte.RealmManagement.Config
   alias Astarte.DataAccess.Database
   alias Astarte.RealmManagement.DatabaseTestHelper
+  alias Astarte.RealmManagement.DatabaseFixtures
   alias Astarte.RealmManagement.Engine
+  alias Astarte.Core.Triggers.SimpleTriggerConfig
+  alias Astarte.Core.Triggers.SimpleTriggersProtobuf.TaggedSimpleTrigger
+  alias Astarte.Core.Device
 
   @test_interface_a_0 """
   {
@@ -379,9 +384,10 @@ defmodule Astarte.RealmManagement.EngineTest do
         {
             "endpoint": "/%{sensor_id}/value",
             "type": "double",
-            "explicit_timestamp": false,
             "description": "Updated description.",
-            "doc": "Updated docs."
+            "doc": "Updated docs.",
+            "retention": "stored",
+            "expiry": 7200
         }
     ]
   }
@@ -402,11 +408,238 @@ defmodule Astarte.RealmManagement.EngineTest do
             "type": "string",
             "explicit_timestamp": false,
             "description": "Updated description.",
-            "doc": "Updated docs."
+            "doc": "Updated docs.",
+            "retention": "stored",
+            "expiry": 7200
         }
     ]
   }
   """
+
+  @test_interface_e_0 """
+  {
+    "interface_name": "com.autotest.AggregateValuesUpdate",
+    "version_major": 1,
+    "version_minor": 0,
+    "type": "datastream",
+    "ownership": "device",
+    "description": "The description.",
+    "doc": "The docs.",
+    "aggregation": "object",
+    "mappings": [
+        {
+            "endpoint": "/%{sensor_id}/value1",
+            "type": "double",
+            "description": "Description.",
+            "doc": "Docs."
+        },
+        {
+            "endpoint": "/%{sensor_id}/value2",
+            "type": "double",
+            "description": "Description.",
+            "doc": "Docs."
+        }
+    ]
+  }
+  """
+
+  @test_interface_e_1 """
+  {
+    "interface_name": "com.autotest.AggregateValuesUpdate",
+    "version_major": 1,
+    "version_minor": 1,
+    "type": "datastream",
+    "ownership": "device",
+    "description": "The description.",
+    "doc": "The docs.",
+    "aggregation": "object",
+    "mappings": [
+        {
+            "endpoint": "/%{sensor_id}/value1",
+            "type": "double",
+            "explicit_timestamp": true,
+            "description": "Updated description.",
+            "doc": "Updated docs.",
+            "retention": "stored",
+            "expiry": 1000
+        },
+        {
+            "endpoint": "/%{sensor_id}/value2",
+            "type": "double",
+            "explicit_timestamp": true,
+            "description": "Other updated description.",
+            "doc": "Other updated docs.",
+            "retention": "stored",
+            "expiry": 1000
+        }
+    ]
+  }
+  """
+
+  @test_interface_e_incompatible_change """
+  {
+    "interface_name": "com.autotest.AggregateValuesUpdate",
+    "version_major": 1,
+    "version_minor": 1,
+    "type": "datastream",
+    "ownership": "device",
+    "description": "The description.",
+    "doc": "The docs.",
+    "aggregation": "object",
+    "mappings": [
+        {
+            "endpoint": "/%{sensor_id}/value1",
+            "type": "double",
+            "explicit_timestamp": true,
+            "description": "Updated description.",
+            "doc": "Updated docs.",
+            "retention": "stored",
+            "expiry": 1000
+        },
+        {
+            "endpoint": "/%{sensor_id}/value2",
+            "type": "double",
+            "explicit_timestamp": true,
+            "description": "Other updated description.",
+            "doc": "Other updated docs.",
+            "retention": "stored",
+            "expiry": 20000
+        }
+    ]
+  }
+  """
+
+  @test_interface_f_0 """
+  {
+    "interface_name": "com.autotest.AggregateValuesUpdateAndAdd",
+    "version_major": 1,
+    "version_minor": 0,
+    "type": "datastream",
+    "ownership": "device",
+    "description": "The description.",
+    "doc": "The docs.",
+    "aggregation": "object",
+    "mappings": [
+        {
+            "endpoint": "/%{sensor_id}/value1",
+            "type": "string",
+            "description": "Description.",
+            "doc": "Docs."
+        }
+    ]
+  }
+  """
+
+  @test_interface_f_1 """
+  {
+    "interface_name": "com.autotest.AggregateValuesUpdateAndAdd",
+    "version_major": 1,
+    "version_minor": 1,
+    "type": "datastream",
+    "ownership": "device",
+    "description": "The description.",
+    "doc": "The docs.",
+    "aggregation": "object",
+    "mappings": [
+        {
+            "endpoint": "/%{sensor_id}/value1",
+            "type": "string",
+            "explicit_timestamp": true,
+            "description": "Updated description.",
+            "doc": "Updated docs.",
+            "retention": "volatile",
+            "expiry": 2000
+        },
+        {
+            "endpoint": "/%{sensor_id}/value2",
+            "type": "double",
+            "explicit_timestamp": true,
+            "description": "New description.",
+            "doc": "New docs.",
+            "retention": "volatile",
+            "expiry": 2000
+        }
+    ]
+  }
+  """
+
+  @test_draft_interface_g_0 """
+  {
+   "interface_name": "com.astarte.ObjectAggregationIface",
+   "version_major": 0,
+   "version_minor": 3,
+   "type": "datastream",
+   "ownership": "device",
+   "aggregation": "object",
+   "description": "Interface description.",
+   "doc": "Interface documentation.",
+   "mappings": [
+      {
+        "endpoint": "/x",
+        "type": "double",
+        "explicit_timestamp": true
+      },
+      {
+        "endpoint": "/y",
+        "type": "double",
+        "explicit_timestamp": true
+      }
+    ]
+  }
+  """
+
+  @test_interface_h_0 """
+  {
+    "interface_name": "com.astarte.SomeInterface",
+    "version_major": 0,
+    "version_minor": 1,
+    "type": "datastream",
+    "ownership": "device",
+    "description": "Interface description.",
+    "doc": "Interface documentation.",
+    "mappings": [
+        {
+            "endpoint": "/aaa/a",
+            "type": "double",
+            "database_retention_policy": "use_ttl",
+            "database_retention_ttl": 60,
+            "explicit_timestamp": true
+        }
+    ]
+  }
+  """
+
+  @test_trigger_policy_1 """
+    {
+      "name": "aname",
+      "error_handlers": [
+        {
+          "on" : "any_error",
+          "strategy": "retry"
+        }
+      ],
+      "maximum_capacity": 300,
+      "retry_times": 10,
+      "event_ttl": 10
+    }
+  """
+
+  @test_trigger_policy_2 """
+    {
+      "name": "anothername",
+      "error_handlers": [
+        {
+          "on" : "any_error",
+          "strategy": "retry"
+        }
+      ],
+      "maximum_capacity": 300,
+      "retry_times": 10,
+      "event_ttl": 10
+    }
+  """
+
+  @test_realm_name "autotestrealm"
 
   setup do
     with {:ok, client} <- DatabaseTestHelper.connect_to_test_database() do
@@ -622,6 +855,47 @@ defmodule Astarte.RealmManagement.EngineTest do
     assert Engine.delete_interface("autotestrealm", "com.ObjectAggregation", 0) == :ok
   end
 
+  @tag pr: 913
+  test "success to install interface when datastream_maximum_storage_retention equal to 0" do
+    DatabaseTestHelper.seed_realm_test_data!(
+      realm_name: "autotestrealm",
+      datastream_maximum_storage_retention: 0
+    )
+
+    assert Engine.install_interface("autotestrealm", @test_interface_h_0) == :ok
+  end
+
+  @tag pr: 913
+  test "success to install interface when database_retention_ttl lower than the maximum" do
+    DatabaseTestHelper.seed_realm_test_data!(
+      realm_name: "autotestrealm",
+      datastream_maximum_storage_retention: 70
+    )
+
+    assert Engine.install_interface("autotestrealm", @test_interface_h_0) == :ok
+  end
+
+  @tag pr: 913
+  test "success to install interface when database_retention_ttl equal the maximum" do
+    DatabaseTestHelper.seed_realm_test_data!(
+      realm_name: "autotestrealm",
+      datastream_maximum_storage_retention: 60
+    )
+
+    assert Engine.install_interface("autotestrealm", @test_interface_h_0) == :ok
+  end
+
+  @tag pr: 913
+  test "fail to install interface when database_retention_ttl is higher than the maximum" do
+    DatabaseTestHelper.seed_realm_test_data!(
+      realm_name: "autotestrealm",
+      datastream_maximum_storage_retention: 10
+    )
+
+    assert Engine.install_interface("autotestrealm", @test_interface_h_0) ==
+             {:error, :maximum_database_retention_exceeded}
+  end
+
   test "delete datastream interface" do
     assert Engine.install_interface("autotestrealm", @test_draft_interface_c_0) == :ok
 
@@ -702,7 +976,7 @@ defmodule Astarte.RealmManagement.EngineTest do
              {:ok, [[major_version: 0, minor_version: 15]]}
   end
 
-  test "update explicit timestamp, doc and description for individual datastream interface" do
+  test "update explicit timestamp, doc, description, expiry and retention for individual datastream interface" do
     assert Engine.install_interface("autotestrealm", @test_interface_d_0) == :ok
 
     assert Engine.get_interfaces_list("autotestrealm") == {:ok, ["org.astarte-platform.Values"]}
@@ -712,6 +986,11 @@ defmodule Astarte.RealmManagement.EngineTest do
 
     assert Engine.update_interface("autotestrealm", @test_interface_d_1) == :ok
 
+    {:ok, updated_interface} =
+      unpack_source(Engine.interface_source("autotestrealm", "org.astarte-platform.Values", 1))
+
+    assert {:ok, ^updated_interface} = unpack_source({:ok, @test_interface_d_1})
+
     assert Engine.list_interface_versions("autotestrealm", "org.astarte-platform.Values") ==
              {:ok, [[major_version: 1, minor_version: 1]]}
 
@@ -719,7 +998,7 @@ defmodule Astarte.RealmManagement.EngineTest do
              {:error, :incompatible_endpoint_change}
   end
 
-  test "update object aggregated interface" do
+  test "update object aggregated interface adding an endpoint" do
     assert Engine.install_interface("autotestrealm", @test_draft_interface_b_0) == :ok
 
     assert unpack_source(Engine.interface_source("autotestrealm", "com.ObjectAggregation", 0)) ==
@@ -743,6 +1022,59 @@ defmodule Astarte.RealmManagement.EngineTest do
     assert Engine.delete_interface("autotestrealm", "com.ObjectAggregation", 0) == :ok
 
     assert Engine.get_interfaces_list("autotestrealm") == {:ok, []}
+  end
+
+  test "update explicit timestamp, doc, description, expiry and retention for object datastream interface" do
+    assert Engine.install_interface("autotestrealm", @test_interface_e_0) == :ok
+
+    assert Engine.get_interfaces_list("autotestrealm") ==
+             {:ok, ["com.autotest.AggregateValuesUpdate"]}
+
+    assert Engine.list_interface_versions("autotestrealm", "com.autotest.AggregateValuesUpdate") ==
+             {:ok, [[major_version: 1, minor_version: 0]]}
+
+    assert Engine.update_interface("autotestrealm", @test_interface_e_1) == :ok
+
+    {:ok, updated_interface} =
+      unpack_source(
+        Engine.interface_source("autotestrealm", "com.autotest.AggregateValuesUpdate", 1)
+      )
+
+    assert {:ok, ^updated_interface} = unpack_source({:ok, @test_interface_e_1})
+
+    assert Engine.list_interface_versions("autotestrealm", "com.autotest.AggregateValuesUpdate") ==
+             {:ok, [[major_version: 1, minor_version: 1]]}
+
+    assert Engine.update_interface("autotestrealm", @test_interface_e_incompatible_change) ==
+             {:error, :invalid_interface_document}
+  end
+
+  test "update a mapping and add an endpoint in one shot for object datastream interface" do
+    assert Engine.install_interface("autotestrealm", @test_interface_f_0) == :ok
+
+    assert Engine.get_interfaces_list("autotestrealm") ==
+             {:ok, ["com.autotest.AggregateValuesUpdateAndAdd"]}
+
+    assert Engine.list_interface_versions(
+             "autotestrealm",
+             "com.autotest.AggregateValuesUpdateAndAdd"
+           ) ==
+             {:ok, [[major_version: 1, minor_version: 0]]}
+
+    assert Engine.update_interface("autotestrealm", @test_interface_f_1) == :ok
+
+    {:ok, updated_interface} =
+      unpack_source(
+        Engine.interface_source("autotestrealm", "com.autotest.AggregateValuesUpdateAndAdd", 1)
+      )
+
+    assert {:ok, ^updated_interface} = unpack_source({:ok, @test_interface_f_1})
+
+    assert Engine.list_interface_versions(
+             "autotestrealm",
+             "com.autotest.AggregateValuesUpdateAndAdd"
+           ) ==
+             {:ok, [[major_version: 1, minor_version: 1]]}
   end
 
   test "fail update missing interface" do
@@ -884,6 +1216,367 @@ defmodule Astarte.RealmManagement.EngineTest do
     assert Engine.get_jwt_public_key_pem("notexisting") == {:error, :realm_not_found}
   end
 
+  test "install HTTP trigger" do
+    trigger_name = "http_trigger"
+
+    action = """
+    {
+      "http_url": "http://hello.world.ai",
+      "http_method": "post",
+      "ignore_ssl_errors": true
+    }
+    """
+
+    assert {:ok, []} = Engine.get_triggers_list(@test_realm_name)
+
+    assert :ok = Engine.install_trigger(@test_realm_name, trigger_name, nil, action, [])
+
+    assert {:ok, [^trigger_name]} = Engine.get_triggers_list(@test_realm_name)
+  end
+
+  test "install AMQP trigger" do
+    trigger_name = "amqp_trigger"
+
+    action = """
+    {
+      "amqp_exchange": "astarte_events_test_hello_world",
+      "amqp_routing_key": "my_routing_key",
+      "amqp_message_expiration_ms": 10000,
+      "amqp_message_persistent": false
+    }
+    """
+
+    assert :ok = Engine.install_trigger(@test_realm_name, trigger_name, nil, action, [])
+  end
+
+  test "delete trigger" do
+    trigger_name = "http_trigger"
+
+    action = """
+    {
+      "http_url": "http://hello.world.ai",
+      "http_method": "post"
+    }
+    """
+
+    # Just to make sure a trigger exists
+    _ = Engine.install_trigger(@test_realm_name, trigger_name, nil, action, [])
+
+    assert {:ok, [^trigger_name]} = Engine.get_triggers_list(@test_realm_name)
+
+    assert :ok = Engine.delete_trigger(@test_realm_name, trigger_name)
+
+    assert {:ok, []} = Engine.get_triggers_list(@test_realm_name)
+  end
+
+  test "fail install when trigger already exists" do
+    trigger_name = "a_trigger"
+
+    action = """
+    {
+      "amqp_exchange": "astarte_events_test_hello_world",
+      "amqp_routing_key": "my_routing_key",
+      "amqp_message_expiration_ms": 10000,
+      "amqp_message_persistent": false
+    }
+    """
+
+    assert :ok = Engine.install_trigger(@test_realm_name, trigger_name, nil, action, [])
+
+    assert {:error, :already_installed_trigger} =
+             Engine.install_trigger(@test_realm_name, trigger_name, nil, action, [])
+  end
+
+  test "fail to install trigger on missing interface" do
+    trigger_name = "http_trigger_missing_iface"
+
+    action = """
+    {
+      "http_url": "http://hello.world.ai",
+      "http_method": "post"
+    }
+    """
+
+    serialized_simple_triggers =
+      [
+        %SimpleTriggerConfig{
+          type: "data_trigger",
+          on: "incoming_data",
+          interface_name: "com.ispirata.TestMissing",
+          interface_major: 0,
+          match_path: "/streamTest/value",
+          value_match_operator: "*"
+        }
+      ]
+      |> serialize_simple_triggers()
+
+    assert {:error, :interface_not_found} =
+             Engine.install_trigger(
+               @test_realm_name,
+               trigger_name,
+               nil,
+               action,
+               serialized_simple_triggers
+             )
+  end
+
+  test "fail to install property trigger on datastream interface" do
+    # Just to make sure a datastream interface is installed
+    _ = Engine.install_interface(@test_realm_name, @test_draft_interface_c_0)
+
+    trigger_name = "property_trigger"
+
+    action = """
+    {
+      "http_url": "http://hello.world.ai",
+      "http_method": "post"
+    }
+    """
+
+    serialized_simple_triggers =
+      [
+        %SimpleTriggerConfig{
+          type: "data_trigger",
+          on: "value_change",
+          interface_name: "com.ispirata.TestDatastream",
+          interface_major: 0,
+          match_path: "/*",
+          value_match_operator: "*"
+        }
+      ]
+      |> serialize_simple_triggers()
+
+    assert {:error, :invalid_datastream_trigger} =
+             Engine.install_trigger(
+               @test_realm_name,
+               trigger_name,
+               nil,
+               action,
+               serialized_simple_triggers
+             )
+  end
+
+  test "fail to install value change trigger on all paths" do
+    # Just to make sure a datastream interface is installed
+    _ = Engine.install_interface(@test_realm_name, @test_interface_a_2)
+
+    trigger_name = "invalid_value_change_trigger"
+
+    action = """
+    {
+      "http_url": "http://hello.world.ai",
+      "http_method": "post"
+    }
+    """
+
+    serialized_simple_triggers =
+      [
+        %SimpleTriggerConfig{
+          type: "data_trigger",
+          on: "value_change",
+          interface_name: "com.ispirata.Hemera.DeviceLog.Status",
+          interface_major: 2,
+          match_path: "/*"
+        }
+      ]
+      |> serialize_simple_triggers()
+
+    assert {:error, :unsupported_trigger_type} =
+             Engine.install_trigger(
+               @test_realm_name,
+               trigger_name,
+               nil,
+               action,
+               serialized_simple_triggers
+             )
+  end
+
+  test "fail to install trigger not supported by object-aggregated interface" do
+    # Just to make sure an object-aggregated interface is installed
+    :ok = Engine.install_interface("autotestrealm", @test_draft_interface_g_0)
+
+    trigger_name = "not_supported_trigger"
+
+    action = """
+    {
+      "http_url": "http://hello.world.ai",
+      "http_method": "post"
+    }
+    """
+
+    serialized_simple_triggers =
+      [
+        %SimpleTriggerConfig{
+          type: "data_trigger",
+          on: "value_stored",
+          interface_name: "com.astarte.ObjectAggregationIface",
+          interface_major: 0,
+          match_path: "/test/realValues",
+          value_match_operator: "*"
+        }
+      ]
+      |> serialize_simple_triggers()
+
+    assert {:error, :invalid_object_aggregation_trigger} =
+             Engine.install_trigger(
+               @test_realm_name,
+               trigger_name,
+               nil,
+               action,
+               serialized_simple_triggers
+             )
+  end
+
+  test "fail to delete missing trigger" do
+    trigger_name = "missing_trigger"
+
+    assert {:error, :trigger_not_found} = Engine.delete_trigger(@test_realm_name, trigger_name)
+  end
+
+  test "install trigger policy" do
+    assert Engine.get_trigger_policies_list("autotestrealm") == {:ok, []}
+
+    assert Engine.install_trigger_policy("autotestrealm", @test_trigger_policy_1) == :ok
+    assert Engine.install_trigger_policy("autotestrealm", @test_trigger_policy_2) == :ok
+
+    # can't install again the same policy
+    assert Engine.install_trigger_policy("autotestrealm", @test_trigger_policy_1) ==
+             {:error, :trigger_policy_already_present}
+
+    assert Engine.delete_trigger_policy("autotestrealm", "aname") == :ok
+
+    assert Engine.get_trigger_policies_list("autotestrealm") == {:ok, ["anothername"]}
+
+    assert Engine.install_trigger_policy("autotestrealm", @test_trigger_policy_1) == :ok
+
+    {:ok, policies_list} = Engine.get_trigger_policies_list("autotestrealm")
+
+    sorted_policies =
+      policies_list
+      |> Enum.sort()
+
+    assert sorted_policies == ["aname", "anothername"]
+  end
+
+  test "trigger and policy installation coherence" do
+    assert Engine.install_trigger_policy("autotestrealm", @test_trigger_policy_1) == :ok
+
+    trigger = %{
+      realm_name: "autotestrealm",
+      name: "test_trigger",
+      policy: "aname",
+      action: Jason.encode!(%{}),
+      simple_triggers: []
+    }
+
+    assert Engine.install_trigger(
+             trigger.realm_name,
+             trigger.name,
+             trigger.policy,
+             trigger.action,
+             trigger.simple_triggers
+           ) == :ok
+
+    assert Engine.delete_trigger(trigger.realm_name, trigger.name) == :ok
+
+    assert Engine.delete_trigger_policy("autotestrealm", "aname") == :ok
+  end
+
+  test "trigger with non existant policy fails" do
+    trigger = %{
+      realm_name: "autotestrealm",
+      name: "test_trigger",
+      policy: "idontexist",
+      action: Jason.encode!(%{}),
+      simple_triggers: []
+    }
+
+    assert {:error, :trigger_policy_not_found} =
+             Engine.install_trigger(
+               trigger.realm_name,
+               trigger.name,
+               trigger.policy,
+               trigger.action,
+               trigger.simple_triggers
+             )
+  end
+
+  test "trigger with nil policy succeeds" do
+    trigger = %{
+      realm_name: "autotestrealm",
+      name: "test_trigger",
+      policy: nil,
+      action: Jason.encode!(%{}),
+      simple_triggers: []
+    }
+
+    assert Engine.install_trigger(
+             trigger.realm_name,
+             trigger.name,
+             trigger.policy,
+             trigger.action,
+             trigger.simple_triggers
+           ) == :ok
+  end
+
+  test "begin deletion of an existing device" do
+    device_id = Device.random_device_id()
+    encoded_device_id = Device.encode_device_id(device_id)
+    DatabaseTestHelper.seed_devices_test_data!(realm_name: "autotestrealm", device_id: device_id)
+
+    assert :ok = Engine.delete_device(@test_realm_name, encoded_device_id)
+
+    statement = """
+    SELECT * FROM #{CQLUtils.realm_name_to_keyspace_name(@test_realm_name, Config.astarte_instance_id!())}.deletion_in_progress
+    """
+
+    assert [%{device_id: ^device_id}] =
+             Xandra.Cluster.execute!(:xandra, statement, %{}, uuid_format: :binary)
+             |> Enum.to_list()
+  end
+
+  test "do not begin deletion of a missing device" do
+    missing_device_id = Device.random_device_id() |> Device.encode_device_id()
+
+    assert {:error, :device_not_found} = Engine.delete_device(@test_realm_name, missing_device_id)
+  end
+
+  test "retrieve device registration limit for an existing realm" do
+    limit = 10
+    realm_name = "autotestrealm"
+
+    DatabaseTestHelper.seed_realm_test_data!(
+      realm_name: realm_name,
+      device_registration_limit: limit
+    )
+
+    assert {:ok, ^limit} = Engine.get_device_registration_limit(realm_name)
+  end
+
+  test "fail to retrieve device registration limit if realm does not exist" do
+    realm_name = "realm#{System.unique_integer([:positive])}"
+    assert {:error, :realm_not_found} = Engine.get_device_registration_limit(realm_name)
+  end
+
+  test "retrieve datastream_maximum_storage_retention for an existing realm" do
+    retention = 10
+    realm_name = "autotestrealm"
+
+    DatabaseTestHelper.seed_realm_test_data!(
+      realm_name: realm_name,
+      datastream_maximum_storage_retention: retention
+    )
+
+    assert {:ok, ^retention} = Engine.get_datastream_maximum_storage_retention(realm_name)
+  end
+
+  test "fail to retrieve datastream_maximum_storage_retention if realm does not exist" do
+    realm_name = "realm#{System.unique_integer([:positive])}"
+
+    assert {:error, _} =
+             Engine.get_datastream_maximum_storage_retention(realm_name)
+  end
+
   defp unpack_source({:ok, source}) when is_binary(source) do
     interface_obj = Jason.decode!(source)
 
@@ -898,5 +1591,11 @@ defmodule Astarte.RealmManagement.EngineTest do
 
   defp unpack_source(any) do
     any
+  end
+
+  defp serialize_simple_triggers(simple_triggers) do
+    simple_triggers
+    |> Enum.map(&SimpleTriggerConfig.to_tagged_simple_trigger/1)
+    |> Enum.map(&TaggedSimpleTrigger.encode/1)
   end
 end

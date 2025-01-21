@@ -1,7 +1,7 @@
 #
 # This file is part of Astarte.
 #
-# Copyright 2017 Ispirata Srl
+# Copyright 2017-2023 SECO Mind Srl
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -30,11 +30,11 @@ defmodule Astarte.AppEngine.APIWeb.ErrorView do
     %{errors: %{detail: "Value size exceeds size limits"}}
   end
 
-  def render("403_cannot_write_to_device_owned.json", _assigns) do
+  def render("405_cannot_write_to_device_owned.json", _assigns) do
     %{errors: %{detail: "Cannot write to device owned resource"}}
   end
 
-  def render("403_read_only_resource.json", _assigns) do
+  def render("405_read_only_resource.json", _assigns) do
     %{errors: %{detail: "Cannot write to read-only resource"}}
   end
 
@@ -94,6 +94,10 @@ defmodule Astarte.AppEngine.APIWeb.ErrorView do
     %{errors: %{detail: "Invalid attributes"}}
   end
 
+  def render("422_unexpected_object_key.json", _assigns) do
+    %{errors: %{detail: "Unexpected object key"}}
+  end
+
   def render("500.json", _assigns) do
     %{errors: %{detail: "Internal server error"}}
   end
@@ -104,6 +108,30 @@ defmodule Astarte.AppEngine.APIWeb.ErrorView do
 
   def render("403.json", _assigns) do
     %{errors: %{detail: "Forbidden"}}
+  end
+
+  def render("missing_token.json", _assigns) do
+    %{errors: %{detail: "Missing authorization token"}}
+  end
+
+  def render("invalid_token.json", _assigns) do
+    %{errors: %{detail: "Invalid JWT token"}}
+  end
+
+  def render("invalid_auth_path.json", _assigns) do
+    %{
+      errors: %{
+        detail: "Authorization failed due to an invalid path"
+      }
+    }
+  end
+
+  def render("authorization_path_not_matched.json", %{method: method, path: path}) do
+    %{
+      errors: %{
+        detail: "Unauthorized access to #{method} #{path}. Please verify your permissions"
+      }
+    }
   end
 
   def render("503_cannot_push_to_device.json", _assigns) do

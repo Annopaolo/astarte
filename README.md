@@ -1,7 +1,7 @@
 # Astarte
 
 ![](https://github.com/astarte-platform/astarte/workflows/Build%20and%20Test%20Astarte%20Apps/badge.svg?branch=master)
-[![codecov](https://codecov.io/gh/astarte-platform/astarte/branch/master/graph/badge.svg)](https://codecov.io/gh/astarte-platform/astarte)
+[![codecov](https://codecov.io/gh/astarte-platform/astarte/tree/master/graph/badge.svg)](https://codecov.io/gh/astarte-platform/astarte)
 
 <img src="doc/images/mascotte.svg" align="left" width="160px" />Astarte is an Open Source IoT
 platform focused on Data management and processing written in [Elixir](https://github.com/elixir-lang/elixir).
@@ -16,10 +16,12 @@ and [Cassandra](http://cassandra.apache.org/)/[ScyllaDB](https://www.scylladb.co
 
 ## Resources and Quickstart
 
- * [Astarte Documentation](https://docs.astarte-platform.org/1.0) - The main resource to learn about Astarte.
- * [astartectl](https://github.com/astarte-platform/astartectl) - A Command Line tool to manage your Astarte cluster(s).
- * [Astarte Kubernetes Operator](https://github.com/astarte-platform/astarte-kubernetes-operator) - The preferred and
-   supported way to run Astarte - in Production, and pretty much anywhere else.
+ * [Astarte Documentation](https://docs.astarte-platform.org) - The main resource to learn about
+   Astarte.
+ * [astartectl](https://github.com/astarte-platform/astartectl) - A Command Line tool to manage your
+   Astarte cluster(s).
+ * [Astarte Kubernetes Operator](https://github.com/astarte-platform/astarte-kubernetes-operator) -
+   The preferred and supported way to run Astarte - in Production, and pretty much anywhere else.
  * Device SDKs - Connect your device to Astarte in a few lines of code. Available for
    [Python](https://github.com/astarte-platform/astarte-device-sdk-python),
    [Qt5](https://github.com/astarte-platform/astarte-device-sdk-qt5),
@@ -30,7 +32,7 @@ and [Cassandra](http://cassandra.apache.org/)/[ScyllaDB](https://www.scylladb.co
 
 **This is the master branch, which is not guaranteed to always be in a usable state.**
 
-**For production purposes we recommend using the latest stable release (currently [v1.0.0](https://github.com/astarte-platform/astarte/tree/release-1.0)), this branch should be used only for 1.1 development activities.**
+**For production purposes we recommend using the latest stable release (currently [v1.2](https://github.com/astarte-platform/astarte/tree/release-1.2)), this branch should be used only for v1.3 development activities.**
 
 Can't be easier. Pick your favorite machine with at least 4GB of free RAM, make sure it has
 [Docker](https://www.docker.com/), and simply:
@@ -38,15 +40,16 @@ Can't be easier. Pick your favorite machine with at least 4GB of free RAM, make 
 ```sh
 $ git clone https://github.com/astarte-platform/astarte.git && cd astarte
 $ docker run -v $(pwd)/compose:/compose astarte/docker-compose-initializer:snapshot
-$ docker-compose up -d
+$ docker compose pull
+$ docker compose up -d
 ```
 
 Make sure to use the latest stable release if you want a flawless experience.
 
 You should be up and running in a matter of minutes. If you want a more thorough explanation and
 find out how to access your new Astarte cluster and what you can do with it, [follow our "Astarte in
-5 minutes" tutorial](https://docs.astarte-platform.org/1.0/010-astarte_in_5_minutes.html) to get
-some fake or real devices to stream and process data while your tea gets ready.
+5 minutes" tutorial](https://docs.astarte-platform.org/astarte/latest/010-astarte_in_5_minutes.html) to
+get some fake or real devices to stream and process data while your tea gets ready.
 
 ## Sweet! Let's move it to production!
 
@@ -55,10 +58,10 @@ tricky, and requires some knowledge about the platform to make sure it won't bre
 
 So, if you're serious about getting Astarte in your production environment, you might want to learn
 more about it first. Start by [having a look at its
-architecture](https://docs.astarte-platform.org/1.0/001-intro_architecture.html) and [finding
-out how it works](https://docs.astarte-platform.org/1.0/001-intro_user.html). Once you feel
-confident, head over to the [Administration
-Manual](https://docs.astarte-platform.org/1.0/001-intro_administrator.html).
+architecture](https://docs.astarte-platform.org/astarte/latest/001-intro_architecture.html) and
+[finding out how it works](https://docs.astarte-platform.org/astarte/latest/001-intro_user.html). Once
+you feel confident, head over to the [Administration
+Manual](https://docs.astarte-platform.org/astarte-kubernetes-operator/latest/001-intro_administrator.html).
 
 ## Where do I find binaries?
 
@@ -93,13 +96,14 @@ Yup, stay tuned :) or get in touch with us.
 
 ## I need some help with my installation! Where can I get commercial support?
 
-Glad you asked. Astarte is developed by [Ispirata](https://ispirata.com), who fuels its development
-thanks to the generosity of many customers running it in production. Besides consultancy,
-installation, maintenance, long-term support and customizations, Ispirata also commercializes
-Astarte Enterprise, an Astarte variant packing in some additional goodies and features.
+Glad you asked. Astarte is developed by SECO Mind, who fuels its development thanks to the
+generosity of many customers running it in production. Besides consultancy, installation,
+maintenance, long-term support and customizations, SECO Mind also commercializes Astarte Enterprise,
+an Astarte variant packing in some additional goodies and features.
 
-[Get in touch](https://ispirata.com/contact/) to find out how we can help you in getting Astarte in
-its best possible shape for your specific needs.
+[Get in touch](https://astarte.cloud/contactus) or [contact us via email](mailto:info@secomind.com)
+to find out how we can help you in getting Astarte in its best possible shape for your specific
+needs.
 
 # License
 

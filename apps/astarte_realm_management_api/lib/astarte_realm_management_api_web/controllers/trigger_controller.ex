@@ -24,9 +24,6 @@ defmodule Astarte.RealmManagement.APIWeb.TriggerController do
 
   action_fallback Astarte.RealmManagement.APIWeb.FallbackController
 
-  plug Astarte.RealmManagement.APIWeb.Plug.LogRealm
-  plug Astarte.RealmManagement.APIWeb.Plug.AuthorizePath
-
   def index(conn, %{"realm_name" => realm_name}) do
     triggers = Triggers.list_triggers(realm_name)
     render(conn, "index.json", triggers: triggers)
@@ -44,6 +41,21 @@ defmodule Astarte.RealmManagement.APIWeb.TriggerController do
         |> put_status(:conflict)
         |> render("already_installed_trigger.json")
 
+      {:error, :invalid_datastream_trigger} ->
+        conn
+        |> put_status(:bad_request)
+        |> render("invalid_datastream_trigger.json")
+
+      {:error, :unsupported_trigger_type} ->
+        conn
+        |> put_status(:bad_request)
+        |> render("unsupported_trigger_type.json")
+
+      {:error, :invalid_object_aggregation_trigger} ->
+        conn
+        |> put_status(:bad_request)
+        |> render("invalid_object_aggregation_trigger.json")
+
       # To FallbackController
       {:error, other} ->
         {:error, other}
@@ -53,6 +65,11 @@ defmodule Astarte.RealmManagement.APIWeb.TriggerController do
   def show(conn, %{"realm_name" => realm_name, "id" => id}) do
     with {:ok, trigger} <- Triggers.get_trigger(realm_name, id) do
       render(conn, "show.json", trigger: trigger)
+    else
+      {:error, :cannot_retrieve_simple_trigger} ->
+        conn
+        |> put_status(:internal_server_error)
+        |> render("cannot_retrieve_simple_trigger.json")
     end
   end
 
@@ -72,6 +89,11 @@ defmodule Astarte.RealmManagement.APIWeb.TriggerController do
     with {:ok, %Trigger{} = trigger} <- Triggers.get_trigger(realm_name, id),
          {:ok, %Trigger{}} <- Triggers.delete_trigger(realm_name, trigger) do
       send_resp(conn, :no_content, "")
+    else
+      {:error, :cannot_delete_simple_trigger} ->
+        conn
+        |> put_status(:internal_server_error)
+        |> render("cannot_delete_simple_trigger.json")
     end
   end
 end

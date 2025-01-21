@@ -37,13 +37,6 @@ defmodule AstarteE2E.Client do
     device_id = Keyword.fetch!(opts, :device_id)
     check_repetitions = Keyword.fetch!(opts, :check_repetitions)
 
-    verify_option =
-      if Keyword.get(opts, :ignore_ssl_errors, false) do
-        :verify_none
-      else
-        :verify_peer
-      end
-
     remote_device = [
       url: url,
       realm: realm,
@@ -57,7 +50,7 @@ defmodule AstarteE2E.Client do
              __MODULE__,
              WebSocketClient,
              remote_device,
-             [transport_opts: [ssl_verify: verify_option]],
+             socket_options(opts),
              name: via_tuple(realm, device_id)
            ) do
       :telemetry.execute(
@@ -169,7 +162,7 @@ defmodule AstarteE2E.Client do
       :ok
     else
       {:error, reason} ->
-        Logger.warn("Failed to install triggers with reason: #{inspect(reason)}.",
+        Logger.warning("Failed to install triggers with reason: #{inspect(reason)}.",
           tag: "install_triggers_failed"
         )
 
@@ -181,7 +174,7 @@ defmodule AstarteE2E.Client do
     Enum.reduce_while(triggers, :ok, fn trigger, _acc ->
       case GenSocketClient.push(transport, topic, "watch", trigger) do
         {:error, reason} ->
-          Logger.warn("Watch failed with reason: #{inspect(reason)}.",
+          Logger.warning("Watch failed with reason: #{inspect(reason)}.",
             tag: "watch_failed"
           )
 
@@ -201,6 +194,25 @@ defmodule AstarteE2E.Client do
     room_name = Utils.random_string()
 
     "rooms:#{realm}:#{device_id}_#{room_name}"
+  end
+
+  defp socket_options(opts) do
+    if Keyword.get(opts, :ignore_ssl_errors, false) do
+      [transport_opts: [ssl_verify: :verify_none]]
+    else
+      [
+        transport_opts: [
+          ssl_verify: :verify_peer,
+          socket_opts: [
+            cacertfile: :certifi.cacertfile(),
+            customize_hostname_check: [
+              match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
+            ],
+            depth: 10
+          ]
+        ]
+      ]
+    end
   end
 
   defp via_tuple(realm, device_id) do
@@ -291,7 +303,7 @@ defmodule AstarteE2E.Client do
   end
 
   def handle_channel_closed(topic, _payload, _transport, state) do
-    Logger.warn("Channel closed for #{inspect(topic)}.",
+    Logger.warning("Channel closed for #{inspect(topic)}.",
       tag: "channel_closed"
     )
 
@@ -401,7 +413,7 @@ defmodule AstarteE2E.Client do
 
     ServiceNotifier.notify_service_down("Message timeout")
 
-    Logger.warn("Incoming message timeout. Key = #{inspect(key)}",
+    Logger.warning("Incoming message timeout. Key = #{inspect(key)}",
       tag: "message_timeout"
     )
 
@@ -421,7 +433,7 @@ defmodule AstarteE2E.Client do
 
     ServiceNotifier.notify_service_down("Maximum number of request timeout reached")
 
-    Logger.warn(
+    Logger.warning(
       "Maximum number of requests timeout reached. The websocket client is going to crash.",
       tag: "maximum_timeout_number_reached"
     )
@@ -444,7 +456,7 @@ defmodule AstarteE2E.Client do
 
     ServiceNotifier.notify_service_down("Request timeout")
 
-    Logger.warn("Request timed out. Key = #{inspect(key)}", tag: "request_timeout")
+    Logger.warning("Request timed out. Key = #{inspect(key)}", tag: "request_timeout")
 
     {{_ts, from, _tref}, new_pending_requests} = Map.pop(pending_requests, key)
     remaining_timeouts_to_crash = state.timeouts_to_crash - 1
@@ -469,7 +481,7 @@ defmodule AstarteE2E.Client do
       updated_state = %{state | connection_attempts: updated_attempts}
       {:connect, updated_state}
     else
-      Logger.warn(
+      Logger.warning(
         "Cannot establish a connection after #{inspect(@connection_attempts)} attempts. Closing application.",
         tag: "connection_failed"
       )
@@ -511,7 +523,7 @@ defmodule AstarteE2E.Client do
       ) do
     :telemetry.execute([:astarte_end_to_end, :messages, :failed], %{})
 
-    Logger.warn("Cannot verify the payload: the client is not connected.",
+    Logger.warning("Cannot verify the payload: the client is not connected.",
       tag: "verify_not_possible"
     )
 

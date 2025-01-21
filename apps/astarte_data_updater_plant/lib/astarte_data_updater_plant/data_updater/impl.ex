@@ -1,7 +1,7 @@
 #
 # This file is part of Astarte.
 #
-# Copyright 2017 Ispirata Srl
+# Copyright 2017 - 2023 SECO Mind Srl
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,7 +17,10 @@
 #
 
 defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
+  @behaviour Mississippi.Consumer.DataUpdater.Handler
+
   alias Astarte.Core.CQLUtils
+  alias Astarte.DataUpdaterPlant.Config
   alias Astarte.Core.Device
   alias Astarte.Core.InterfaceDescriptor
   alias Astarte.Core.Mapping
@@ -26,7 +29,9 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
   alias Astarte.DataUpdaterPlant.DataUpdater.State
   alias Astarte.Core.Triggers.DataTrigger
   alias Astarte.Core.Triggers.SimpleTriggersProtobuf.DataTrigger, as: ProtobufDataTrigger
+  alias Astarte.Core.Triggers.SimpleTriggersProtobuf.DeviceTrigger, as: ProtobufDeviceTrigger
   alias Astarte.Core.Triggers.SimpleTriggersProtobuf.Utils, as: SimpleTriggersProtobufUtils
+  alias Astarte.Core.Triggers.SimpleTriggersProtobuf.AMQPTriggerTarget
   alias Astarte.DataAccess.Data
   alias Astarte.DataAccess.Database
   alias Astarte.DataAccess.Device, as: DeviceQueries
@@ -37,25 +42,36 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
   alias Astarte.DataUpdaterPlant.DataUpdater.EventTypeUtils
   alias Astarte.DataUpdaterPlant.DataUpdater.PayloadsDecoder
   alias Astarte.DataUpdaterPlant.DataUpdater.Queries
-  alias Astarte.DataUpdaterPlant.MessageTracker
   alias Astarte.DataUpdaterPlant.RPC.VMQPlugin
   alias Astarte.DataUpdaterPlant.TriggersHandler
   alias Astarte.DataUpdaterPlant.ValueMatchOperators
+  alias Astarte.DataUpdaterPlant.TriggerPolicy.Queries, as: PolicyQueries
+  alias Astarte.RPC.Protocol.DataUpdaterPlant.InstallVolatileTrigger
+  alias Astarte.RPC.Protocol.DataUpdaterPlant.DeleteVolatileTrigger
   require Logger
 
   @paths_cache_size 32
   @interface_lifespan_decimicroseconds 60 * 10 * 1000 * 10000
   @device_triggers_lifespan_decimicroseconds 60 * 10 * 1000 * 10000
   @groups_lifespan_decimicroseconds 60 * 10 * 1000 * 10000
+  @deletion_refresh_lifespan_decimicroseconds 60 * 10 * 1000 * 10000
+  @datastream_maximum_retention_refresh_lifespan_decimicroseconds 60 * 10 * 1000 * 10000
 
-  def init_state(realm, device_id, message_tracker) do
-    MessageTracker.register_data_updater(message_tracker)
-    Process.monitor(message_tracker)
+  @msg_type_header "x_astarte_msg_type"
+  @ip_header "x_astarte_remote_ip"
+  @internal_path_header "x_astarte_internal_path"
+  @interface_header "x_astarte_interface"
+  @path_header "x_astarte_path"
+  @control_path_header "x_astarte_control_path"
 
-    new_state = %State{
+  @impl true
+  def init(sharding_key) do
+    # TODO change this, we want extended device IDs to fall in the same process
+    {realm, device_id} = sharding_key
+
+    state = %State{
       realm: realm,
       device_id: device_id,
-      message_tracker: message_tracker,
       connected: true,
       groups: [],
       interfaces: %{},
@@ -66,27 +82,95 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
       device_triggers: %{},
       data_triggers: %{},
       volatile_triggers: [],
-      introspection_triggers: %{},
       interface_exchanged_bytes: %{},
       interface_exchanged_msgs: %{},
       last_seen_message: 0,
       last_device_triggers_refresh: 0,
-      last_groups_refresh: 0
+      last_groups_refresh: 0,
+      trigger_id_to_policy_name: %{},
+      discard_messages: false,
+      last_deletion_in_progress_refresh: 0,
+      last_datastream_maximum_retention_refresh: 0
     }
 
     encoded_device_id = Device.encode_device_id(device_id)
     Logger.metadata(realm: realm, device_id: encoded_device_id)
     Logger.info("Created device process.", tag: "device_process_created")
 
-    {:ok, db_client} = Database.connect(realm: new_state.realm)
+    {:ok, db_client} = Database.connect(realm: state.realm)
 
     stats_and_introspection =
       Queries.retrieve_device_stats_and_introspection!(db_client, device_id)
 
     {:ok, ttl} = Queries.fetch_datastream_maximum_storage_retention(db_client)
 
-    Map.merge(new_state, stats_and_introspection)
-    |> Map.put(:datastream_maximum_storage_retention, ttl)
+    new_state =
+      Map.merge(state, stats_and_introspection)
+      |> Map.put(:datastream_maximum_storage_retention, ttl)
+
+    {:ok, new_state}
+  end
+
+  @impl true
+  def handle_message(payload, headers, _message_id, timestamp, state) do
+    %{@msg_type_header => message_type} = headers
+
+    case message_type do
+      "connection" ->
+        %{@ip_header => ip_address} = headers
+        handle_connection(state, ip_address, timestamp)
+
+      "disconnection" ->
+        handle_disconnection(state, timestamp)
+
+      "heartbeat" ->
+        handle_heartbeat(state, timestamp)
+
+      "internal" ->
+        %{@internal_path_header => internal_path} = headers
+        handle_internal(state, internal_path, payload, timestamp)
+
+      "introspection" ->
+        handle_introspection(state, payload, timestamp)
+
+      "data" ->
+        %{@interface_header => interface, @path_header => path} = headers
+        handle_data(state, interface, path, payload, timestamp)
+
+      "control" ->
+        %{@control_path_header => control_path} = headers
+        handle_control(state, control_path, payload, timestamp)
+
+      _ ->
+        # Ack all messages for now
+        {:ack, :ok, state}
+    end
+  end
+
+  @impl true
+  def handle_signal(signal, state) do
+    case signal do
+      {:handle_install_volatile_trigger, install_volatile_trigger} ->
+        handle_install_volatile_trigger(state, install_volatile_trigger)
+
+      {:handle_delete_volatile_trigger, delete_volatile_trigger} ->
+        handle_delete_volatile_trigger(state, delete_volatile_trigger)
+
+      :dump_state ->
+        {state, state}
+
+      {:start_device_deletion, timestamp} ->
+        start_device_deletion(state, timestamp)
+
+      _ ->
+        {:ok, state}
+    end
+  end
+
+  @impl true
+  def terminate(_, state) do
+    # All is ok for now
+    {:ok, state}
   end
 
   def handle_deactivation(_state) do
@@ -95,7 +179,11 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
     :ok
   end
 
-  def handle_connection(state, ip_address_string, message_id, timestamp) do
+  def handle_connection(%State{discard_messages: true} = state, _, _, _) do
+    {:ack, :discard_messages, state}
+  end
+
+  def handle_connection(state, ip_address_string, timestamp) do
     {:ok, db_client} = Database.connect(realm: state.realm)
 
     new_state = execute_time_based_actions(state, timestamp, db_client)
@@ -113,7 +201,7 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
           ip_address
 
         _ ->
-          Logger.warn("Received invalid IP address #{ip_address_string}.")
+          Logger.warning("Received invalid IP address #{ip_address_string}.")
           {0, 0, 0, 0}
       end
 
@@ -124,41 +212,160 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
       ip_address
     )
 
-    trigger_targets = Map.get(new_state.device_triggers, :on_device_connection, [])
+    trigger_target_with_policy_list =
+      Map.get(new_state.device_triggers, :on_device_connection, [])
+      |> Enum.map(fn target ->
+        {target, Map.get(state.trigger_id_to_policy_name, target.parent_trigger_id)}
+      end)
+
     device_id_string = Device.encode_device_id(new_state.device_id)
 
     TriggersHandler.device_connected(
-      trigger_targets,
+      trigger_target_with_policy_list,
       new_state.realm,
       device_id_string,
       ip_address_string,
       timestamp_ms
     )
 
-    MessageTracker.ack_delivery(new_state.message_tracker, message_id)
     Logger.info("Device connected.", ip_address: ip_address_string, tag: "device_connected")
 
     :telemetry.execute([:astarte, :data_updater_plant, :data_updater, :device_connection], %{}, %{
       realm: new_state.realm
     })
 
-    %{new_state | connected: true, last_seen_message: timestamp}
+    {:ack, :ok, %{new_state | connected: true, last_seen_message: timestamp}}
   end
 
-  def handle_heartbeat(state, message_id, timestamp) do
-    {:ok, db_client} = Database.connect(realm: state.realm)
-
-    new_state = execute_time_based_actions(state, timestamp, db_client)
-
-    Queries.maybe_refresh_device_connected!(db_client, new_state.device_id)
-
-    MessageTracker.ack_delivery(new_state.message_tracker, message_id)
-    Logger.info("Device heartbeat.", tag: "device_heartbeat")
-
-    %{new_state | connected: true, last_seen_message: timestamp}
+  defp handle_install_volatile_trigger(%State{discard_messages: true} = state, _) do
+    # Don't care
+    {:ok, state}
   end
 
-  def handle_disconnection(state, message_id, timestamp) do
+  defp handle_install_volatile_trigger(state, install_volatile_trigger) do
+    %InstallVolatileTrigger{
+      simple_trigger: simple_trigger,
+      trigger_target: trigger_target,
+      simple_trigger_id: trigger_id,
+      parent_id: parent_id,
+      object_id: object_id,
+      object_type: object_type
+    } = install_volatile_trigger
+
+    trigger = SimpleTriggersProtobufUtils.deserialize_simple_trigger(simple_trigger)
+
+    target =
+      SimpleTriggersProtobufUtils.deserialize_trigger_target(trigger_target)
+      |> Map.put(:simple_trigger_id, trigger_id)
+      |> Map.put(:parent_trigger_id, parent_id)
+
+    volatile_triggers_list = [
+      {{object_id, object_type}, {trigger, target}} | state.volatile_triggers
+    ]
+
+    new_state = Map.put(state, :volatile_triggers, volatile_triggers_list)
+
+    if Map.has_key?(new_state.interface_ids_to_name, object_id) do
+      interface_name = Map.get(new_state.interface_ids_to_name, object_id)
+      %InterfaceDescriptor{automaton: automaton} = new_state.interfaces[interface_name]
+
+      case trigger do
+        {:data_trigger, %ProtobufDataTrigger{match_path: "/*"}} ->
+          {:ok, load_trigger(new_state, trigger, target)}
+
+        {:data_trigger, %ProtobufDataTrigger{match_path: match_path}} ->
+          with {:ok, _endpoint_id} <- EndpointsAutomaton.resolve_path(match_path, automaton) do
+            {:ok, load_trigger(new_state, trigger, target)}
+          else
+            {:guessed, _} ->
+              # State rollback here
+              {{:error, :invalid_match_path}, state}
+
+            {:error, :not_found} ->
+              # State rollback here
+              {{:error, :invalid_match_path}, state}
+          end
+      end
+    else
+      case trigger do
+        {:data_trigger, %ProtobufDataTrigger{interface_name: "*"}} ->
+          {:ok, load_trigger(new_state, trigger, target)}
+
+        {:data_trigger,
+         %ProtobufDataTrigger{
+           interface_name: interface_name,
+           interface_major: major,
+           match_path: "/*"
+         }} ->
+          with :ok <-
+                 InterfaceQueries.check_if_interface_exists(state.realm, interface_name, major) do
+            {:ok, new_state}
+          else
+            {:error, reason} ->
+              # State rollback here
+              {{:error, reason}, state}
+          end
+
+        {:data_trigger,
+         %ProtobufDataTrigger{
+           interface_name: interface_name,
+           interface_major: major,
+           match_path: match_path
+         }} ->
+          with {:ok, %InterfaceDescriptor{automaton: automaton}} <-
+                 InterfaceQueries.fetch_interface_descriptor(state.realm, interface_name, major),
+               {:ok, _endpoint_id} <- EndpointsAutomaton.resolve_path(match_path, automaton) do
+            {:ok, new_state}
+          else
+            {:error, :not_found} ->
+              {{:error, :invalid_match_path}, state}
+
+            {:guessed, _} ->
+              {{:error, :invalid_match_path}, state}
+
+            {:error, reason} ->
+              # State rollback here
+              {{:error, reason}, state}
+          end
+
+        {:device_trigger, _} ->
+          {:ok, load_trigger(new_state, trigger, target)}
+      end
+    end
+  end
+
+  def handle_delete_volatile_trigger(%State{discard_messages: true} = state, _) do
+    # Don't care
+    {:ok, state}
+  end
+
+  def handle_delete_volatile_trigger(state, delete_volatile_trigger) do
+    %DeleteVolatileTrigger{
+      trigger_id: trigger_id
+    } = delete_volatile_trigger
+
+    {new_volatile, maybe_trigger} =
+      Enum.reduce(state.volatile_triggers, {[], nil}, fn item, {acc, found} ->
+        {_, {_simple_trigger, trigger_target}} = item
+
+        if trigger_target.simple_trigger_id == trigger_id do
+          {acc, item}
+        else
+          {[item | acc], found}
+        end
+      end)
+
+    case maybe_trigger do
+      {{obj_id, obj_type}, {simple_trigger, trigger_target}} ->
+        %{state | volatile_triggers: new_volatile}
+        |> delete_volatile_trigger({obj_id, obj_type}, {simple_trigger, trigger_target})
+
+      nil ->
+        {:ok, state}
+    end
+  end
+
+  def handle_disconnection(state, timestamp) do
     {:ok, db_client} = Database.connect(realm: state.realm)
 
     new_state =
@@ -166,10 +373,81 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
       |> execute_time_based_actions(timestamp, db_client)
       |> set_device_disconnected(db_client, timestamp)
 
-    MessageTracker.ack_delivery(new_state.message_tracker, message_id)
     Logger.info("Device disconnected.", tag: "device_disconnected")
 
-    %{new_state | last_seen_message: timestamp}
+    {:ack, :ok, %{new_state | last_seen_message: timestamp}}
+  end
+
+  def handle_heartbeat(%State{discard_messages: true} = state, _) do
+    # Don't care
+    {:ack, :discard_messages, state}
+  end
+
+  # TODO make this private when all heartbeats will be moved to internal
+  def handle_heartbeat(state, timestamp) do
+    {:ok, db_client} = Database.connect(realm: state.realm)
+
+    new_state = execute_time_based_actions(state, timestamp, db_client)
+
+    Queries.maybe_refresh_device_connected!(db_client, new_state.device_id)
+
+    Logger.info("Device heartbeat.", tag: "device_heartbeat")
+
+    {:ack, :ok, %{new_state | connected: true, last_seen_message: timestamp}}
+  end
+
+  def handle_internal(state, "/heartbeat", _payload, timestamp) do
+    handle_heartbeat(state, timestamp)
+  end
+
+  def handle_internal(%State{discard_messages: true} = state, "/f", _, _) do
+    keyspace_name =
+      CQLUtils.realm_name_to_keyspace_name(state.realm, Config.astarte_instance_id!())
+
+    :ok = Queries.ack_end_device_deletion(keyspace_name, state.device_id)
+    _ = Logger.info("End device deletion acked.", tag: "device_delete_ack")
+    {:stop, :ack_end_device_deletion, :ack, state}
+  end
+
+  def handle_internal(state, path, payload, timestamp) do
+    Logger.warning(
+      "Unexpected internal message on #{path}, base64-encoded payload: #{inspect(Base.encode64(payload))}",
+      tag: "unexpected_internal_message"
+    )
+
+    {:ok, new_state} = ask_clean_session(state, timestamp)
+    continue_arg = {:unexpected_internal_message, payload, path, timestamp}
+
+    {:discard, :unexpected_internal_message, new_state, {:continue, continue_arg}}
+  end
+
+  def handle_introspection(%State{discard_messages: true} = state, _, _) do
+    {:ack, :discard_messages, state}
+  end
+
+  def handle_introspection(state, payload, timestamp) do
+    with {:ok, new_introspection_list} <- PayloadsDecoder.parse_introspection(payload) do
+      process_introspection(state, new_introspection_list, payload, timestamp)
+    else
+      {:error, :invalid_introspection} ->
+        Logger.warning("Discarding invalid introspection: #{inspect(Base.encode64(payload))}.",
+          tag: "invalid_introspection"
+        )
+
+        {:ok, new_state} = ask_clean_session(state, timestamp)
+        continue_arg = {:invalid_introspection, payload, timestamp}
+
+        {:discard, :invalid_introspection, new_state, {:continue, continue_arg}}
+    end
+  end
+
+  def start_device_deletion(state, timestamp) do
+    {:ok, db_client} = Database.connect(realm: state.realm)
+
+    # Device deletion is among time-based actions
+    new_state = execute_time_based_actions(state, timestamp, db_client)
+
+    {:ok, new_state}
   end
 
   defp execute_incoming_data_triggers(
@@ -188,25 +466,59 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
     # any interface triggers
     get_on_data_triggers(state, :on_incoming_data, :any_interface, :any_endpoint)
     |> Enum.each(fn trigger ->
-      targets = trigger.trigger_targets
-      TriggersHandler.incoming_data(targets, realm, device, interface, path, payload, timestamp)
+      target_with_policy_list = get_target_with_policy_list(state, trigger)
+
+      TriggersHandler.incoming_data(
+        target_with_policy_list,
+        realm,
+        device,
+        interface,
+        path,
+        payload,
+        timestamp
+      )
     end)
 
     # any endpoint triggers
     get_on_data_triggers(state, :on_incoming_data, interface_id, :any_endpoint)
     |> Enum.each(fn trigger ->
-      targets = trigger.trigger_targets
-      TriggersHandler.incoming_data(targets, realm, device, interface, path, payload, timestamp)
+      target_with_policy_list = get_target_with_policy_list(state, trigger)
+
+      TriggersHandler.incoming_data(
+        target_with_policy_list,
+        realm,
+        device,
+        interface,
+        path,
+        payload,
+        timestamp
+      )
     end)
 
     # incoming data triggers
     get_on_data_triggers(state, :on_incoming_data, interface_id, endpoint_id, path, value)
     |> Enum.each(fn trigger ->
-      targets = trigger.trigger_targets
-      TriggersHandler.incoming_data(targets, realm, device, interface, path, payload, timestamp)
+      target_with_policy_list = get_target_with_policy_list(state, trigger)
+
+      TriggersHandler.incoming_data(
+        target_with_policy_list,
+        realm,
+        device,
+        interface,
+        path,
+        payload,
+        timestamp
+      )
     end)
 
     :ok
+  end
+
+  defp get_target_with_policy_list(state, trigger) do
+    trigger.trigger_targets
+    |> Enum.map(fn target ->
+      {target, Map.get(state.trigger_id_to_policy_name, target.parent_trigger_id)}
+    end)
   end
 
   defp get_value_change_triggers(state, interface_id, endpoint_id, path, value) do
@@ -247,15 +559,22 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
          path,
          previous_value,
          value,
-         timestamp
+         timestamp,
+         trigger_id_to_policy_name_map
        ) do
     old_bson_value = Cyanide.encode!(%{v: previous_value})
     payload = Cyanide.encode!(%{v: value})
 
     if previous_value != value do
       Enum.each(value_change_triggers, fn trigger ->
+        trigger_target_with_policy_list =
+          trigger.trigger_targets
+          |> Enum.map(fn target ->
+            {target, Map.get(trigger_id_to_policy_name_map, target.parent_trigger_id)}
+          end)
+
         TriggersHandler.value_change(
-          trigger.trigger_targets,
+          trigger_target_with_policy_list,
           realm,
           device_id_string,
           interface_name,
@@ -278,31 +597,61 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
          path,
          previous_value,
          value,
-         timestamp
+         timestamp,
+         trigger_id_to_policy_name_map
        ) do
     old_bson_value = Cyanide.encode!(%{v: previous_value})
     payload = Cyanide.encode!(%{v: value})
 
     if previous_value == nil and value != nil do
       Enum.each(path_created_triggers, fn trigger ->
-        targets = trigger.trigger_targets
-        TriggersHandler.path_created(targets, realm, device, interface, path, payload, timestamp)
+        target_with_policy_list =
+          trigger.trigger_targets
+          |> Enum.map(fn target ->
+            {target, Map.get(trigger_id_to_policy_name_map, target.parent_trigger_id)}
+          end)
+
+        TriggersHandler.path_created(
+          target_with_policy_list,
+          realm,
+          device,
+          interface,
+          path,
+          payload,
+          timestamp
+        )
       end)
     end
 
     if previous_value != nil and value == nil do
       Enum.each(path_removed_triggers, fn trigger ->
-        targets = trigger.trigger_targets
-        TriggersHandler.path_removed(targets, realm, device, interface, path, timestamp)
+        target_with_policy_list =
+          trigger.trigger_targets
+          |> Enum.map(fn target ->
+            {target, Map.get(trigger_id_to_policy_name_map, target.parent_trigger_id)}
+          end)
+
+        TriggersHandler.path_removed(
+          target_with_policy_list,
+          realm,
+          device,
+          interface,
+          path,
+          timestamp
+        )
       end)
     end
 
     if previous_value != value do
       Enum.each(value_change_applied_triggers, fn trigger ->
-        targets = trigger.trigger_targets
+        target_with_policy_list =
+          trigger.trigger_targets
+          |> Enum.map(fn target ->
+            {target, Map.get(trigger_id_to_policy_name_map, target.parent_trigger_id)}
+          end)
 
         TriggersHandler.value_change_applied(
-          targets,
+          target_with_policy_list,
           realm,
           device,
           interface,
@@ -320,11 +669,16 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
   defp execute_device_error_triggers(state, error_name, error_metadata \\ %{}, timestamp) do
     timestamp_ms = div(timestamp, 10_000)
 
-    trigger_targets = Map.get(state.device_triggers, :on_device_error, [])
+    trigger_target_with_policy_list =
+      Map.get(state.device_triggers, :on_device_error, [])
+      |> Enum.map(fn target ->
+        {target, Map.get(state.trigger_id_to_policy_name, target.parent_trigger_id)}
+      end)
+
     device_id_string = Device.encode_device_id(state.device_id)
 
     TriggersHandler.device_error(
-      trigger_targets,
+      trigger_target_with_policy_list,
       state.realm,
       device_id_string,
       error_name,
@@ -335,7 +689,13 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
     :ok
   end
 
-  def handle_data(state, interface, path, payload, message_id, timestamp) do
+  def handle_data(%State{discard_messages: true} = state, _, _, _, _) do
+    # TODO: do we want to include this in the handling time metric?
+    {:ack, :discard_messages, state}
+  end
+
+  def handle_data(state, interface, path, payload, timestamp) do
+    start = System.monotonic_time()
     {:ok, db_client} = Database.connect(realm: state.realm)
 
     new_state = execute_time_based_actions(state, timestamp, db_client)
@@ -384,7 +744,7 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
         with {:has_change_triggers, :ok} <- {:has_change_triggers, has_change_triggers},
              {:ok, property_value} <-
                Data.fetch_property(
-                 db_client,
+                 new_state.realm,
                  new_state.device_id,
                  interface_descriptor,
                  endpoint,
@@ -409,7 +769,8 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
             path,
             previous_value,
             value,
-            maybe_explicit_value_timestamp
+            maybe_explicit_value_timestamp,
+            state.trigger_id_to_policy_name
           )
       end
 
@@ -463,31 +824,9 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
             end
 
         interface_descriptor.type == :datastream ->
-          Logger.warn("Tried to unset a datastream.", tag: "unset_on_datastream")
-          MessageTracker.discard(new_state.message_tracker, message_id)
-
-          :telemetry.execute(
-            [:astarte, :data_updater_plant, :data_updater, :discarded_message],
-            %{},
-            %{realm: new_state.realm}
-          )
-
-          base64_payload = Base.encode64(payload)
-
-          error_metadata = %{
-            "interface" => inspect(interface),
-            "path" => inspect(path),
-            "base64_payload" => base64_payload
-          }
-
-          execute_device_error_triggers(
-            new_state,
-            "unset_on_datastream",
-            error_metadata,
-            timestamp
-          )
-
-          raise "Unsupported"
+          Logger.warning("Tried to unset a datastream.", tag: "unset_on_datastream")
+          continue_arg = {:unset_on_datastream, interface, path, payload, timestamp}
+          {:discard, :unset_on_datastream, new_state, {:continue, continue_arg}}
 
         true ->
           :ok
@@ -519,7 +858,8 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
             path,
             previous_value,
             value,
-            maybe_explicit_value_timestamp
+            maybe_explicit_value_timestamp,
+            state.trigger_id_to_policy_name
           )
       end
 
@@ -527,311 +867,325 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
       paths_cache = Cache.put(new_state.paths_cache, {interface, path}, %CachedPath{}, ttl)
       new_state = %{new_state | paths_cache: paths_cache}
 
-      MessageTracker.ack_delivery(new_state.message_tracker, message_id)
-
-      :telemetry.execute(
-        [:astarte, :data_updater_plant, :data_updater, :processed_message],
-        %{},
-        %{
-          realm: new_state.realm,
-          interface_type: interface_descriptor.type
-        }
-      )
-
-      update_stats(new_state, interface, interface_descriptor.major_version, path, payload)
+      continue_arg = {:processed_message, interface_descriptor, interface, path, payload, start}
+      {:ack, :ok, new_state, {:continue, continue_arg}}
     else
       {:error, :cannot_write_on_server_owned_interface} ->
-        Logger.warn(
+        Logger.warning(
           "Tried to write on server owned interface: #{interface} on " <>
-            "path: #{path}, payload: #{inspect(payload)}, timestamp: #{inspect(timestamp)}.",
+            "path: #{path}, base64-encoded payload: #{inspect(Base.encode64(payload))}, timestamp: #{inspect(timestamp)}.",
           tag: "write_on_server_owned_interface"
         )
 
         {:ok, new_state} = ask_clean_session(new_state, timestamp)
-        MessageTracker.discard(new_state.message_tracker, message_id)
-
-        :telemetry.execute(
-          [:astarte, :data_updater_plant, :data_updater, :discarded_message],
-          %{},
-          %{realm: new_state.realm}
-        )
-
-        base64_payload = Base.encode64(payload)
-
-        error_metadata = %{
-          "interface" => inspect(interface),
-          "path" => inspect(path),
-          "base64_payload" => base64_payload
-        }
-
-        execute_device_error_triggers(
-          new_state,
-          "write_on_server_owned_interface",
-          error_metadata,
-          timestamp
-        )
-
-        update_stats(new_state, interface, nil, path, payload)
+        continue_arg = {:write_on_server_owned_interface, interface, path, payload, timestamp}
+        {:discard, :cannot_write_on_server_owned_interface, new_state, {:continue, continue_arg}}
 
       {:error, :invalid_interface} ->
-        Logger.warn("Received invalid interface: #{inspect(interface)}.", tag: "invalid_interface")
+        Logger.warning("Received invalid interface: #{inspect(interface)}.",
+          tag: "invalid_interface"
+        )
 
         {:ok, new_state} = ask_clean_session(new_state, timestamp)
-        MessageTracker.discard(new_state.message_tracker, message_id)
-
-        :telemetry.execute(
-          [:astarte, :data_updater_plant, :data_updater, :discarded_message],
-          %{},
-          %{realm: new_state.realm}
-        )
-
-        base64_payload = Base.encode64(payload)
-
-        error_metadata = %{
-          "interface" => inspect(interface),
-          "path" => inspect(path),
-          "base64_payload" => base64_payload
-        }
-
-        execute_device_error_triggers(
-          new_state,
-          "invalid_interface",
-          error_metadata,
-          timestamp
-        )
-
-        # We dont't update stats on an invalid interface
-        new_state
+        continue_arg = {:invalid_interface, interface, path, payload, timestamp}
+        {:discard, :invalid_interface, new_state, {:continue, continue_arg}}
 
       {:error, :invalid_path} ->
-        Logger.warn("Received invalid path: #{inspect(path)}.", tag: "invalid_path")
+        Logger.warning("Received invalid path: #{inspect(path)}.", tag: "invalid_path")
         {:ok, new_state} = ask_clean_session(new_state, timestamp)
-        MessageTracker.discard(new_state.message_tracker, message_id)
-
-        :telemetry.execute(
-          [:astarte, :data_updater_plant, :data_updater, :discarded_message],
-          %{},
-          %{realm: new_state.realm}
-        )
-
-        base64_payload = Base.encode64(payload)
-
-        error_metadata = %{
-          "interface" => inspect(interface),
-          "path" => inspect(path),
-          "base64_payload" => base64_payload
-        }
-
-        execute_device_error_triggers(new_state, "invalid_path", error_metadata, timestamp)
-
-        update_stats(new_state, interface, nil, path, payload)
+        continue_arg = {:invalid_path, interface, path, payload, timestamp}
+        {:discard, :invalid_path, new_state, {:continue, continue_arg}}
 
       {:error, :mapping_not_found} ->
-        Logger.warn("Mapping not found for #{interface}#{path}. Maybe outdated introspection?",
+        Logger.warning("Mapping not found for #{interface}#{path}. Maybe outdated introspection?",
           tag: "mapping_not_found"
         )
 
         {:ok, new_state} = ask_clean_session(new_state, timestamp)
-        MessageTracker.discard(new_state.message_tracker, message_id)
-
-        :telemetry.execute(
-          [:astarte, :data_updater_plant, :data_updater, :discarded_message],
-          %{},
-          %{realm: new_state.realm}
-        )
-
-        base64_payload = Base.encode64(payload)
-
-        error_metadata = %{
-          "interface" => inspect(interface),
-          "path" => inspect(path),
-          "base64_payload" => base64_payload
-        }
-
-        execute_device_error_triggers(new_state, "mapping_not_found", error_metadata, timestamp)
-
-        update_stats(new_state, interface, nil, path, payload)
+        continue_arg = {:mapping_not_found, interface, path, payload, timestamp}
+        {:discard, :mapping_not_found, new_state, {:continue, continue_arg}}
 
       {:error, :interface_loading_failed} ->
-        Logger.warn("Cannot load interface: #{interface}.", tag: "interface_loading_failed")
+        Logger.warning("Cannot load interface: #{interface}.", tag: "interface_loading_failed")
         # TODO: think about additional actions since the problem
         # could be a missing interface in the DB
         {:ok, new_state} = ask_clean_session(new_state, timestamp)
-        MessageTracker.discard(new_state.message_tracker, message_id)
-
-        :telemetry.execute(
-          [:astarte, :data_updater_plant, :data_updater, :discarded_message],
-          %{},
-          %{realm: new_state.realm}
-        )
-
-        base64_payload = Base.encode64(payload)
-
-        error_metadata = %{
-          "interface" => inspect(interface),
-          "path" => inspect(path),
-          "base64_payload" => base64_payload
-        }
-
-        execute_device_error_triggers(
-          new_state,
-          "interface_loading_failed",
-          error_metadata,
-          timestamp
-        )
-
-        update_stats(new_state, interface, nil, path, payload)
+        continue_arg = {:interface_loading_failed, interface, path, payload, timestamp}
+        {:discard, :interface_loading_failed, new_state, {:continue, continue_arg}}
 
       {:guessed, _guessed_endpoints} ->
-        Logger.warn("Mapping guessed for #{interface}#{path}. Maybe outdated introspection?",
+        Logger.warning("Mapping guessed for #{interface}#{path}. Maybe outdated introspection?",
           tag: "ambiguous_path"
         )
 
         {:ok, new_state} = ask_clean_session(new_state, timestamp)
-        MessageTracker.discard(new_state.message_tracker, message_id)
-
-        :telemetry.execute(
-          [:astarte, :data_updater_plant, :data_updater, :discarded_message],
-          %{},
-          %{realm: new_state.realm}
-        )
-
-        base64_payload = Base.encode64(payload)
-
-        error_metadata = %{
-          "interface" => inspect(interface),
-          "path" => inspect(path),
-          "base64_payload" => base64_payload
-        }
-
-        execute_device_error_triggers(
-          new_state,
-          "ambiguous_path",
-          error_metadata,
-          timestamp
-        )
-
-        update_stats(new_state, interface, nil, path, payload)
+        continue_arg = {:ambiguous_path, interface, path, payload, timestamp}
+        {:discard, :ambiguous_path, new_state, {:continue, continue_arg}}
 
       {:error, :undecodable_bson_payload} ->
-        Logger.warn("Invalid BSON payload: #{inspect(payload)} sent to #{interface}#{path}.",
+        Logger.warning(
+          "Invalid BSON base64-encoded payload: #{inspect(Base.encode64(payload))} sent to #{interface}#{path}.",
           tag: "undecodable_bson_payload"
         )
 
         {:ok, new_state} = ask_clean_session(new_state, timestamp)
-        MessageTracker.discard(new_state.message_tracker, message_id)
-
-        :telemetry.execute(
-          [:astarte, :data_updater_plant, :data_updater, :discarded_message],
-          %{},
-          %{realm: new_state.realm}
-        )
-
-        base64_payload = Base.encode64(payload)
-
-        error_metadata = %{
-          "interface" => inspect(interface),
-          "path" => inspect(path),
-          "base64_payload" => base64_payload
-        }
-
-        execute_device_error_triggers(
-          new_state,
-          "undecodable_bson_payload",
-          error_metadata,
-          timestamp
-        )
-
-        update_stats(new_state, interface, nil, path, payload)
+        continue_arg = {:undecodable_bson_payload, interface, path, payload, timestamp}
+        {:discard, :undecodable_bson_payload, new_state, {:continue, continue_arg}}
 
       {:error, :unexpected_value_type} ->
-        Logger.warn("Received invalid value: #{inspect(payload)} sent to #{interface}#{path}.",
+        Logger.warning(
+          "Received invalid value: #{inspect(Base.encode64(payload))} sent to #{interface}#{path}.",
           tag: "unexpected_value_type"
         )
 
         {:ok, new_state} = ask_clean_session(new_state, timestamp)
-        MessageTracker.discard(new_state.message_tracker, message_id)
-
-        :telemetry.execute(
-          [:astarte, :data_updater_plant, :data_updater, :discarded_message],
-          %{},
-          %{realm: new_state.realm}
-        )
-
-        base64_payload = Base.encode64(payload)
-
-        error_metadata = %{
-          "interface" => inspect(interface),
-          "path" => inspect(path),
-          "base64_payload" => base64_payload
-        }
-
-        execute_device_error_triggers(
-          new_state,
-          "unexpected_value_type",
-          error_metadata,
-          timestamp
-        )
-
-        update_stats(new_state, interface, nil, path, payload)
+        continue_arg = {:unexpected_value_type, interface, path, payload, timestamp}
+        {:discard, :unexpected_value_type, new_state, {:continue, continue_arg}}
 
       {:error, :value_size_exceeded} ->
-        Logger.warn("Received huge payload: #{inspect(payload)} sent to #{interface}#{path}.",
+        Logger.warning(
+          "Received huge base64-encoded payload: #{inspect(Base.encode64(payload))} sent to #{interface}#{path}.",
           tag: "value_size_exceeded"
         )
 
         {:ok, new_state} = ask_clean_session(new_state, timestamp)
-        MessageTracker.discard(new_state.message_tracker, message_id)
-
-        :telemetry.execute(
-          [:astarte, :data_updater_plant, :data_updater, :discarded_message],
-          %{},
-          %{realm: new_state.realm}
-        )
-
-        base64_payload = Base.encode64(payload)
-
-        error_metadata = %{
-          "interface" => inspect(interface),
-          "path" => inspect(path),
-          "base64_payload" => base64_payload
-        }
-
-        execute_device_error_triggers(new_state, "value_size_exceeded", error_metadata, timestamp)
-
-        update_stats(new_state, interface, nil, path, payload)
+        continue_arg = {:value_size_exceeded, interface, path, payload, timestamp}
+        {:discard, :value_size_exceeded, new_state, {:continue, continue_arg}}
 
       {:error, :unexpected_object_key} ->
-        Logger.warn("Object has unexpected key: #{inspect(payload)} sent to #{interface}#{path}.",
-          tag: "unexcpected_object_key"
+        base64_payload = Base.encode64(payload)
+
+        Logger.warning(
+          "Received object with unexpected key, object base64 is: #{base64_payload} sent to #{interface}#{path}.",
+          tag: "unexpected_object_key"
         )
 
         {:ok, new_state} = ask_clean_session(new_state, timestamp)
-        MessageTracker.discard(new_state.message_tracker, message_id)
-
-        :telemetry.execute(
-          [:astarte, :data_updater_plant, :data_updater, :discarded_message],
-          %{},
-          %{realm: new_state.realm}
-        )
-
-        base64_payload = Base.encode64(payload)
-
-        error_metadata = %{
-          "interface" => inspect(interface),
-          "path" => inspect(path),
-          "base64_payload" => base64_payload
-        }
-
-        execute_device_error_triggers(
-          new_state,
-          "unexpected_object_key",
-          error_metadata,
-          timestamp
-        )
-
-        update_stats(new_state, interface, nil, path, payload)
+        continue_arg = {:unexpected_object_key, interface, path, payload, timestamp}
+        {:discard, :unexpected_object_key, new_state, {:continue, continue_arg}}
     end
+  end
+
+  @impl true
+  def handle_continue({:unexpected_internal_message, payload, path, timestamp}, state) do
+    :telemetry.execute(
+      [:astarte, :data_updater_plant, :data_updater, :discarded_internal_message],
+      %{},
+      %{realm: state.realm}
+    )
+
+    base64_payload = Base.encode64(payload)
+
+    error_metadata = %{
+      "path" => inspect(path),
+      "base64_payload" => base64_payload
+    }
+
+    # TODO maybe we don't want triggers on unexpected internal messages?
+    execute_device_error_triggers(
+      state,
+      "unexpected_internal_message",
+      error_metadata,
+      timestamp
+    )
+
+    {:ok, update_stats(state, "", nil, path, payload)}
+  end
+
+  @impl true
+  def handle_continue({:invalid_introspection, payload, timestamp}, state) do
+    :telemetry.execute(
+      [:astarte, :data_updater_plant, :data_updater, :discarded_introspection],
+      %{},
+      %{realm: state.realm}
+    )
+
+    base64_payload = Base.encode64(payload)
+
+    error_metadata = %{
+      "base64_payload" => base64_payload
+    }
+
+    execute_device_error_triggers(
+      state,
+      "invalid_introspection",
+      error_metadata,
+      timestamp
+    )
+
+    {:ok, update_stats(state, "", nil, "", payload)}
+  end
+
+  @impl true
+  def handle_continue(
+        {:processed_message, interface_descriptor, interface, path, payload, start_time},
+        state
+      ) do
+    :telemetry.execute(
+      [:astarte, :data_updater_plant, :data_updater, :processed_message],
+      %{},
+      %{
+        realm: state.realm,
+        interface_type: interface_descriptor.type
+      }
+    )
+
+    new_state = update_stats(state, interface, interface_descriptor.major_version, path, payload)
+
+    :telemetry.execute(
+      [:astarte, :data_updater_plant, :data_updater, :handle_data],
+      %{duration: System.monotonic_time() - start_time},
+      %{realm: state.realm}
+    )
+
+    {:ok, new_state}
+  end
+
+  @impl true
+  def handle_continue({:unset_on_datastream, interface, path, payload, timestamp}, state) do
+    :telemetry.execute(
+      [:astarte, :data_updater_plant, :data_updater, :discarded_message],
+      %{},
+      %{realm: state.realm}
+    )
+
+    base64_payload = Base.encode64(payload)
+
+    error_metadata = %{
+      "interface" => inspect(interface),
+      "path" => inspect(path),
+      "base64_payload" => base64_payload
+    }
+
+    execute_device_error_triggers(
+      state,
+      "unset_on_datastream",
+      error_metadata,
+      timestamp
+    )
+
+    # TODO this comes from a previous implementation, change to {:ok, state}
+    raise "Unsupported"
+  end
+
+  @impl true
+  def handle_continue({:invalid_interface, interface, path, payload, timestamp}, state) do
+    :telemetry.execute(
+      [:astarte, :data_updater_plant, :data_updater, :discarded_message],
+      %{},
+      %{realm: state.realm}
+    )
+
+    base64_payload = Base.encode64(payload)
+
+    error_metadata = %{
+      "interface" => inspect(interface),
+      "path" => inspect(path),
+      "base64_payload" => base64_payload
+    }
+
+    execute_device_error_triggers(
+      state,
+      "invalid_interface",
+      error_metadata,
+      timestamp
+    )
+
+    # We dont't update stats on an invalid interface
+    {:ok, state}
+  end
+
+  @impl true
+  def handle_continue({failure, interface, path, payload, timestamp}, state)
+      when failure in [
+             :write_on_server_owned_interface,
+             :invalid_path,
+             :interface_loading_failed,
+             :mapping_not_found,
+             :ambiguous_path,
+             :unencodable_bson_payload,
+             :unexpected_value_type,
+             :value_size_exceeded,
+             :unexpected_object_key
+           ] do
+    :telemetry.execute(
+      [:astarte, :data_updater_plant, :data_updater, :discarded_message],
+      %{},
+      %{realm: state.realm}
+    )
+
+    base64_payload = Base.encode64(payload)
+
+    error_metadata = %{
+      "interface" => inspect(interface),
+      "path" => inspect(path),
+      "base64_payload" => base64_payload
+    }
+
+    execute_device_error_triggers(
+      state,
+      Atom.to_string(failure),
+      error_metadata,
+      timestamp
+    )
+
+    new_state = update_stats(state, interface, nil, path, payload)
+    {:ok, new_state}
+  end
+
+  @impl true
+  def handle_continue({failure, timestamp}, state)
+      when failure in [:session_not_found, :resend_interface_properties_failed] do
+    :telemetry.execute(
+      [:astarte, :data_updater_plant, :data_updater, :discarded_message],
+      %{},
+      %{realm: state.realm}
+    )
+
+    execute_device_error_triggers(state, Atom.to_string(failure), timestamp)
+
+    {:ok, state}
+  end
+
+  @impl true
+  def handle_continue({:empty_cache_error, reason, timestamp}, state) do
+    :telemetry.execute(
+      [:astarte, :data_updater_plant, :data_updater, :discarded_message],
+      %{},
+      %{realm: state.realm}
+    )
+
+    error_metadata = %{"reason" => inspect(reason)}
+
+    execute_device_error_triggers(state, "empty_cache_error", error_metadata, timestamp)
+
+    {:ok, state}
+  end
+
+  @impl true
+  def handle_continue({:unexpected_control_message, path, payload, timestamp}, state) do
+    :telemetry.execute(
+      [:astarte, :data_updater_plant, :data_updater, :discarded_control_message],
+      %{},
+      %{realm: state.realm}
+    )
+
+    base64_payload = Base.encode64(payload)
+
+    error_metadata = %{
+      "path" => inspect(path),
+      "base64_payload" => base64_payload
+    }
+
+    execute_device_error_triggers(
+      state,
+      "unexpected_control_message",
+      error_metadata,
+      timestamp
+    )
+
+    new_state = update_stats(state, "", nil, path, payload)
+    {:ok, new_state}
   end
 
   defp path_ttl(nil) do
@@ -894,7 +1248,13 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
     ValueType.validate_value(expected_type, value)
   end
 
-  # Explicitly match on all structs to avoid pattern matching them as maps below
+  # From Cyanide 2.0, binaries are decoded as %Cyanide.Binary{}
+  def validate_value_type(expected_type, %Cyanide.Binary{} = value) do
+    %Cyanide.Binary{subtype: _subtype, data: bin} = value
+    validate_value_type(expected_type, bin)
+  end
+
+  # Explicitly match on all other structs to avoid pattern matching them as maps below
   def validate_value_type(_expected_type, %_{} = _unsupported_struct) do
     {:error, :unexpected_value_type}
   end
@@ -909,6 +1269,10 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
           {:halt, {:error, reason}}
 
         :error ->
+          Logger.warning("Unexpected key #{inspect(key)} in object #{inspect(object)}.",
+            tag: "unexpected_object_key"
+          )
+
           {:halt, {:error, :unexpected_object_key}}
       end
     end)
@@ -1017,42 +1381,7 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
     }
   end
 
-  def handle_introspection(state, payload, message_id, timestamp) do
-    with {:ok, new_introspection_list} <- PayloadsDecoder.parse_introspection(payload) do
-      process_introspection(state, new_introspection_list, payload, message_id, timestamp)
-    else
-      {:error, :invalid_introspection} ->
-        Logger.warn("Discarding invalid introspection: #{inspect(payload)}.",
-          tag: "invalid_introspection"
-        )
-
-        {:ok, new_state} = ask_clean_session(state, timestamp)
-        MessageTracker.discard(new_state.message_tracker, message_id)
-
-        :telemetry.execute(
-          [:astarte, :data_updater_plant, :data_updater, :discarded_introspection],
-          %{},
-          %{realm: new_state.realm}
-        )
-
-        base64_payload = Base.encode64(payload)
-
-        error_metadata = %{
-          "base64_payload" => base64_payload
-        }
-
-        execute_device_error_triggers(
-          new_state,
-          "invalid_introspection",
-          error_metadata,
-          timestamp
-        )
-
-        update_stats(new_state, "", nil, "", payload)
-    end
-  end
-
-  def process_introspection(state, new_introspection_list, payload, message_id, timestamp) do
+  def process_introspection(state, new_introspection_list, payload, timestamp) do
     {:ok, db_client} = Database.connect(realm: state.realm)
 
     new_state = execute_time_based_actions(state, timestamp, db_client)
@@ -1071,17 +1400,20 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
 
     any_interface_id = SimpleTriggersProtobufUtils.any_interface_object_id()
 
-    %{introspection_triggers: introspection_triggers} =
+    %{device_triggers: device_triggers} =
       populate_triggers_for_object!(new_state, db_client, any_interface_id, :any_interface)
 
     realm = new_state.realm
     device_id_string = Device.encode_device_id(new_state.device_id)
 
-    on_introspection_targets =
-      Map.get(introspection_triggers, {:on_incoming_introspection, :any_interface}, [])
+    on_introspection_target_with_policy_list =
+      Map.get(device_triggers, :on_incoming_introspection, [])
+      |> Enum.map(fn target ->
+        {target, Map.get(state.trigger_id_to_policy_name, target.parent_trigger_id)}
+      end)
 
     TriggersHandler.incoming_introspection(
-      on_introspection_targets,
+      on_introspection_target_with_policy_list,
       realm,
       device_id_string,
       payload,
@@ -1122,11 +1454,19 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
 
             minor = Map.get(db_introspection_minor_map, interface_name)
 
-            interface_added_targets =
-              Map.get(introspection_triggers, {:on_interface_added, :any_interface}, [])
+            interface_added_target_with_policy_list =
+              (Map.get(
+                 device_triggers,
+                 {:on_interface_added, CQLUtils.interface_id(interface_name, interface_major)},
+                 []
+               ) ++
+                 Map.get(device_triggers, {:on_interface_added, :any_interface}, []))
+              |> Enum.map(fn target ->
+                {target, Map.get(state.trigger_id_to_policy_name, target.parent_trigger_id)}
+              end)
 
             TriggersHandler.interface_added(
-              interface_added_targets,
+              interface_added_target_with_policy_list,
               realm,
               device_id_string,
               interface_name,
@@ -1152,11 +1492,19 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
                 :ok
               end
 
-            interface_removed_targets =
-              Map.get(introspection_triggers, {:on_interface_deleted, :any_interface}, [])
+            interface_removed_target_with_policy_list =
+              (Map.get(
+                 device_triggers,
+                 {:on_interface_removed, CQLUtils.interface_id(interface_name, interface_major)},
+                 []
+               ) ++
+                 Map.get(device_triggers, {:on_interface_removed, :any_interface}, []))
+              |> Enum.map(fn target ->
+                {target, Map.get(state.trigger_id_to_policy_name, target.parent_trigger_id)}
+              end)
 
             TriggersHandler.interface_removed(
-              interface_removed_targets,
+              interface_removed_target_with_policy_list,
               realm,
               device_id_string,
               interface_name,
@@ -1200,7 +1548,31 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
     :ok = Queries.add_old_interfaces(db_client, new_state.device_id, old_introspection)
     :ok = Queries.remove_old_interfaces(db_client, new_state.device_id, readded_introspection)
 
-    # TODO: handle triggers for interface minor updates
+    # Deliver interface_minor_updated triggers if needed
+    for {interface_name, old_minor} <- old_minors,
+        interface_major = Map.fetch!(state.introspection, interface_name),
+        Map.get(db_introspection_map, interface_name) == interface_major,
+        new_minor = Map.get(db_introspection_minor_map, interface_name),
+        new_minor != old_minor do
+      interface_id = CQLUtils.interface_id(interface_name, interface_major)
+
+      interface_minor_updated_target_with_policy_list =
+        Map.get(device_triggers, {:on_interface_minor_updated, interface_id}, [])
+        |> Enum.map(fn target ->
+          {target, Map.get(state.trigger_id_to_policy_name, target.parent_trigger_id)}
+        end)
+
+      TriggersHandler.interface_minor_updated(
+        interface_minor_updated_target_with_policy_list,
+        realm,
+        device_id_string,
+        interface_name,
+        interface_major,
+        old_minor,
+        new_minor,
+        timestamp_ms
+      )
+    end
 
     # Removed/updated interfaces must be purged away, otherwise data will be written using old
     # interface_id.
@@ -1219,48 +1591,48 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
       db_introspection_minor_map
     )
 
-    MessageTracker.ack_delivery(new_state.message_tracker, message_id)
-
     :telemetry.execute(
       [:astarte, :data_updater_plant, :data_updater, :processed_introspection],
       %{},
       %{realm: realm}
     )
 
-    %{
+    final_state = %{
       new_state
       | introspection: db_introspection_map,
         paths_cache: Cache.new(@paths_cache_size),
         total_received_msgs: new_state.total_received_msgs + 1,
         total_received_bytes: new_state.total_received_bytes + byte_size(payload)
     }
+
+    {:ack, :ok, final_state}
   end
 
-  def handle_control(state, "/producer/properties", <<0, 0, 0, 0>>, message_id, timestamp) do
+  def handle_control(%State{discard_messages: true} = state, _, _, _) do
+    {:ack, :discard_messages, state}
+  end
+
+  def handle_control(state, "/producer/properties", <<0, 0, 0, 0>>, timestamp) do
     {:ok, db_client} = Database.connect(realm: state.realm)
 
     new_state = execute_time_based_actions(state, timestamp, db_client)
 
     timestamp_ms = div(timestamp, 10_000)
 
-    operation_result = prune_device_properties(new_state, "", timestamp_ms)
+    :ok = prune_device_properties(new_state, "", timestamp_ms)
 
-    if operation_result != :ok do
-      Logger.debug("Result is #{inspect(operation_result)} further actions should be required.")
-    end
-
-    MessageTracker.ack_delivery(new_state.message_tracker, message_id)
-
-    %{
+    final_state = %{
       new_state
       | total_received_msgs: new_state.total_received_msgs + 1,
         total_received_bytes:
           new_state.total_received_bytes + byte_size(<<0, 0, 0, 0>>) +
             byte_size("/producer/properties")
     }
+
+    {:ack, :ok, final_state}
   end
 
-  def handle_control(state, "/producer/properties", payload, message_id, timestamp) do
+  def handle_control(state, "/producer/properties", payload, timestamp) do
     {:ok, db_client} = Database.connect(realm: state.realm)
 
     new_state = execute_time_based_actions(state, timestamp, db_client)
@@ -1271,29 +1643,37 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
 
     <<_size_header::size(32), zlib_payload::binary>> = payload
 
-    decoded_payload = PayloadsDecoder.safe_inflate(zlib_payload)
+    case PayloadsDecoder.safe_inflate(zlib_payload) do
+      {:ok, decoded_payload} ->
+        :ok = prune_device_properties(new_state, decoded_payload, timestamp_ms)
 
-    if decoded_payload != :error do
-      operation_result = prune_device_properties(new_state, decoded_payload, timestamp_ms)
+        final_state = %{
+          new_state
+          | total_received_msgs: new_state.total_received_msgs + 1,
+            total_received_bytes:
+              new_state.total_received_bytes + byte_size(payload) +
+                byte_size("/producer/properties")
+        }
 
-      if operation_result != :ok do
-        Logger.debug("Result is #{inspect(operation_result)} further actions should be required.")
-      end
+        {:ack, :ok, final_state}
+
+      :error ->
+        Logger.warning("Invalid purge_properties payload", tag: "purge_properties_error")
+
+        {:ok, new_state} = ask_clean_session(new_state, timestamp)
+
+        # TODO this could be handled in handle_continue
+        :telemetry.execute(
+          [:astarte, :data_updater_plant, :data_updater, :discarded_message],
+          %{},
+          %{realm: new_state.realm}
+        )
+
+        {:discard, :purge_properties_error, new_state}
     end
-
-    MessageTracker.ack_delivery(new_state.message_tracker, message_id)
-
-    %{
-      new_state
-      | total_received_msgs: new_state.total_received_msgs + 1,
-        total_received_bytes:
-          new_state.total_received_bytes + byte_size(payload) + byte_size("/producer/properties")
-    }
   end
 
-  def handle_control(state, "/emptyCache", _payload, message_id, timestamp) do
-    Logger.debug("Received /emptyCache")
-
+  def handle_control(state, "/emptyCache", _payload, timestamp) do
     {:ok, db_client} = Database.connect(realm: state.realm)
 
     new_state = execute_time_based_actions(state, timestamp, db_client)
@@ -1301,222 +1681,50 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
     with :ok <- send_control_consumer_properties(state, db_client),
          {:ok, new_state} <- resend_all_properties(state, db_client),
          :ok <- Queries.set_pending_empty_cache(db_client, new_state.device_id, false) do
-      MessageTracker.ack_delivery(state.message_tracker, message_id)
-
       :telemetry.execute(
         [:astarte, :data_updater_plant, :data_updater, :processed_empty_cache],
         %{},
         %{realm: new_state.realm}
       )
 
-      new_state
+      {:ack, :ok, new_state}
     else
       {:error, :session_not_found} ->
-        Logger.warn("Cannot push data to device.", tag: "device_session_not_found")
+        Logger.warning("Cannot push data to device.", tag: "device_session_not_found")
 
         {:ok, new_state} = ask_clean_session(new_state, timestamp)
-        MessageTracker.discard(new_state.message_tracker, message_id)
-
-        :telemetry.execute(
-          [:astarte, :data_updater_plant, :data_updater, :discarded_message],
-          %{},
-          %{realm: new_state.realm}
-        )
-
-        execute_device_error_triggers(new_state, "device_session_not_found", timestamp)
-
-        new_state
+        continue_arg = {:session_not_found, timestamp}
+        {:discard, :session_not_found, new_state, {:continue, continue_arg}}
 
       {:error, :sending_properties_to_interface_failed} ->
-        Logger.warn("Cannot resend properties to interface",
+        Logger.warning("Cannot resend properties to interface",
           tag: "resend_interface_properties_failed"
         )
 
         {:ok, new_state} = ask_clean_session(new_state, timestamp)
-        MessageTracker.discard(new_state.message_tracker, message_id)
-
-        :telemetry.execute(
-          [:astarte, :data_updater_plant, :data_updater, :discarded_message],
-          %{},
-          %{realm: new_state.realm}
-        )
-
-        execute_device_error_triggers(
-          new_state,
-          "resend_interface_properties_failed",
-          timestamp
-        )
-
-        new_state
+        continue_arg = {:resend_interface_properties_failed, timestamp}
+        {:discard, :resend_interface_properties_failed, new_state, {:continue, continue_arg}}
 
       {:error, reason} ->
-        Logger.warn("Unhandled error during emptyCache: #{inspect(reason)}",
+        Logger.warning("Unhandled error during emptyCache: #{inspect(reason)}",
           tag: "empty_cache_error"
         )
 
         {:ok, new_state} = ask_clean_session(new_state, timestamp)
-        MessageTracker.discard(new_state.message_tracker, message_id)
-
-        :telemetry.execute(
-          [:astarte, :data_updater_plant, :data_updater, :discarded_message],
-          %{},
-          %{realm: new_state.realm}
-        )
-
-        error_metadata = %{"reason" => inspect(reason)}
-
-        execute_device_error_triggers(new_state, "empty_cache_error", error_metadata, timestamp)
-
-        new_state
+        continue_arg = {:empty_cache_error, reason, timestamp}
+        {:discard, :empty_cache_error, new_state, {:continue, continue_arg}}
     end
   end
 
-  def handle_control(state, path, payload, message_id, timestamp) do
-    Logger.warn("Unexpected control on #{path}, payload: #{inspect(payload)}",
+  def handle_control(state, path, payload, timestamp) do
+    Logger.warning(
+      "Unexpected control on #{path}, base64-encoded payload: #{inspect(Base.encode64(payload))}",
       tag: "unexpected_control_message"
     )
 
     {:ok, new_state} = ask_clean_session(state, timestamp)
-    MessageTracker.discard(new_state.message_tracker, message_id)
-
-    :telemetry.execute(
-      [:astarte, :data_updater_plant, :data_updater, :discarded_control_message],
-      %{},
-      %{realm: new_state.realm}
-    )
-
-    base64_payload = Base.encode64(payload)
-
-    error_metadata = %{
-      "path" => inspect(path),
-      "base64_payload" => base64_payload
-    }
-
-    execute_device_error_triggers(
-      new_state,
-      "unexpected_control_message",
-      error_metadata,
-      timestamp
-    )
-
-    update_stats(new_state, "", nil, path, payload)
-  end
-
-  def handle_install_volatile_trigger(
-        state,
-        object_id,
-        object_type,
-        parent_id,
-        trigger_id,
-        simple_trigger,
-        trigger_target
-      ) do
-    trigger = SimpleTriggersProtobufUtils.deserialize_simple_trigger(simple_trigger)
-
-    target =
-      SimpleTriggersProtobufUtils.deserialize_trigger_target(trigger_target)
-      |> Map.put(:simple_trigger_id, trigger_id)
-      |> Map.put(:parent_trigger_id, parent_id)
-
-    volatile_triggers_list = [
-      {{object_id, object_type}, {trigger, target}} | state.volatile_triggers
-    ]
-
-    new_state = Map.put(state, :volatile_triggers, volatile_triggers_list)
-
-    if Map.has_key?(new_state.interface_ids_to_name, object_id) do
-      interface_name = Map.get(new_state.interface_ids_to_name, object_id)
-      %InterfaceDescriptor{automaton: automaton} = new_state.interfaces[interface_name]
-
-      case trigger do
-        {:data_trigger, %ProtobufDataTrigger{match_path: "/*"}} ->
-          {:ok, load_trigger(new_state, trigger, target)}
-
-        {:data_trigger, %ProtobufDataTrigger{match_path: match_path}} ->
-          with {:ok, _endpoint_id} <- EndpointsAutomaton.resolve_path(match_path, automaton) do
-            {:ok, load_trigger(new_state, trigger, target)}
-          else
-            {:guessed, _} ->
-              # State rollback here
-              {{:error, :invalid_match_path}, state}
-
-            {:error, :not_found} ->
-              # State rollback here
-              {{:error, :invalid_match_path}, state}
-          end
-      end
-    else
-      case trigger do
-        {:data_trigger, %ProtobufDataTrigger{interface_name: "*"}} ->
-          {:ok, load_trigger(new_state, trigger, target)}
-
-        {:data_trigger,
-         %ProtobufDataTrigger{
-           interface_name: interface_name,
-           interface_major: major,
-           match_path: "/*"
-         }} ->
-          with {:ok, db_client} <- Database.connect(realm: state.realm),
-               :ok <- InterfaceQueries.check_if_interface_exists(db_client, interface_name, major) do
-            {:ok, new_state}
-          else
-            {:error, reason} ->
-              # State rollback here
-              {{:error, reason}, state}
-          end
-
-        {:data_trigger,
-         %ProtobufDataTrigger{
-           interface_name: interface_name,
-           interface_major: major,
-           match_path: match_path
-         }} ->
-          with {:ok, db_client} <- Database.connect(realm: state.realm),
-               {:ok, %InterfaceDescriptor{automaton: automaton}} <-
-                 InterfaceQueries.fetch_interface_descriptor(db_client, interface_name, major),
-               {:ok, _endpoint_id} <- EndpointsAutomaton.resolve_path(match_path, automaton) do
-            {:ok, new_state}
-          else
-            {:error, :not_found} ->
-              {{:error, :invalid_match_path}, state}
-
-            {:guessed, _} ->
-              {{:error, :invalid_match_path}, state}
-
-            {:error, reason} ->
-              # State rollback here
-              {{:error, reason}, state}
-          end
-
-        {:introspection_trigger, _} ->
-          {:ok, new_state}
-
-        {:device_trigger, _} ->
-          {:ok, load_trigger(new_state, trigger, target)}
-      end
-    end
-  end
-
-  def handle_delete_volatile_trigger(state, trigger_id) do
-    {new_volatile, maybe_trigger} =
-      Enum.reduce(state.volatile_triggers, {[], nil}, fn item, {acc, found} ->
-        {_, {_simple_trigger, trigger_target}} = item
-
-        if trigger_target.simple_trigger_id == trigger_id do
-          {acc, item}
-        else
-          {[item | acc], found}
-        end
-      end)
-
-    case maybe_trigger do
-      {{obj_id, obj_type}, {simple_trigger, trigger_target}} ->
-        %{state | volatile_triggers: new_volatile}
-        |> delete_volatile_trigger({obj_id, obj_type}, {simple_trigger, trigger_target})
-
-      nil ->
-        {:ok, state}
-    end
+    continue_arg = {:unexpected_control_message, path, payload, timestamp}
+    {:discard, :unexpected_control_message, new_state, {:continue, continue_arg}}
   end
 
   defp delete_volatile_trigger(
@@ -1604,30 +1812,6 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
     {:ok, %{state | device_triggers: updated_device_triggers}}
   end
 
-  defp delete_volatile_trigger(
-         state,
-         {_obj_id, _obj_type},
-         {{:introspection_trigger, proto_buf_introspection_trigger}, trigger_target}
-       ) do
-    introspection_triggers = state.introspection_triggers
-
-    event_type = EventTypeUtils.pretty_change_type(proto_buf_introspection_trigger.change_type)
-
-    introspection_trigger_key =
-      {event_type, proto_buf_introspection_trigger.match_interface || :any_interface}
-
-    updated_targets_list =
-      Map.get(introspection_triggers, introspection_trigger_key, [])
-      |> Enum.reject(fn target ->
-        target == trigger_target
-      end)
-
-    updated_introspection_triggers =
-      Map.put(introspection_triggers, introspection_trigger_key, updated_targets_list)
-
-    {:ok, %{state | introspection_triggers: updated_introspection_triggers}}
-  end
-
   defp reload_groups_on_expiry(state, timestamp, db_client) do
     if state.last_groups_refresh + @groups_lifespan_decimicroseconds <= timestamp do
       {:ok, groups} = Queries.get_device_groups(db_client, state.device_id)
@@ -1684,11 +1868,102 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
   end
 
   defp execute_time_based_actions(state, timestamp, db_client) do
+    if state.connected && state.last_seen_message > 0 do
+      # timestamps are handled as microseconds*10, so we need to divide by 10 when saving as a metric for a coherent data
+      :telemetry.execute(
+        [:astarte, :data_updater_plant, :service, :connected_devices],
+        %{duration: Integer.floor_div(timestamp - state.last_seen_message, 10)},
+        %{realm: state.realm, status: :ok}
+      )
+    end
+
     state
     |> Map.put(:last_seen_message, timestamp)
     |> reload_groups_on_expiry(timestamp, db_client)
     |> purge_expired_interfaces(timestamp)
     |> reload_device_triggers_on_expiry(timestamp, db_client)
+    |> reload_device_deletion_status_on_expiry(timestamp, db_client)
+    |> reload_datastream_maximum_storage_retention_on_expiry(timestamp, db_client)
+  end
+
+  defp reload_device_deletion_status_on_expiry(state, timestamp, db_client) do
+    if state.last_deletion_in_progress_refresh + @deletion_refresh_lifespan_decimicroseconds <=
+         timestamp do
+      new_state = maybe_start_device_deletion(db_client, state, timestamp)
+      %State{new_state | last_deletion_in_progress_refresh: timestamp}
+    else
+      state
+    end
+  end
+
+  defp reload_datastream_maximum_storage_retention_on_expiry(state, timestamp, db_client) do
+    if state.last_datastream_maximum_retention_refresh +
+         @datastream_maximum_retention_refresh_lifespan_decimicroseconds <=
+         timestamp do
+      case Queries.fetch_datastream_maximum_storage_retention(db_client) do
+        {:ok, ttl} ->
+          %State{
+            state
+            | datastream_maximum_storage_retention: ttl,
+              last_datastream_maximum_retention_refresh: timestamp
+          }
+
+        {:error, _reason} ->
+          _ =
+            Logger.warning(
+              "Failed to load last_datastream_maximum_retention_refresh, keeping old one",
+              tag: "last_datastream_maximum_retention_refresh_fail"
+            )
+
+          state
+      end
+    else
+      state
+    end
+  end
+
+  defp maybe_start_device_deletion(db_client, state, timestamp) do
+    if should_start_device_deletion?(state.realm, state.device_id) do
+      encoded_device_id = Device.encode_device_id(state.device_id)
+
+      :ok = force_device_deletion_from_broker(state.realm, encoded_device_id)
+      new_state = set_device_disconnected(state, db_client, timestamp)
+
+      _ =
+        Logger.info("Stop handling data from device in deletion, device_id #{encoded_device_id}")
+
+      # It's ok to repeat that, as we always write ⊤
+      keyspace_name =
+        CQLUtils.realm_name_to_keyspace_name(state.realm, Config.astarte_instance_id!())
+
+      Queries.ack_start_device_deletion(keyspace_name, state.device_id)
+
+      %State{new_state | discard_messages: true}
+    else
+      state
+    end
+  end
+
+  defp should_start_device_deletion?(realm_name, device_id) do
+    keyspace_name =
+      CQLUtils.realm_name_to_keyspace_name(realm_name, Config.astarte_instance_id!())
+
+    case Queries.check_device_deletion_in_progress(keyspace_name, device_id) do
+      {:ok, true} ->
+        true
+
+      {:ok, false} ->
+        false
+
+      {:error, reason} ->
+        _ =
+          Logger.warning(
+            "Cannot check device deletion status for #{inspect(device_id)}, reason #{inspect(reason)}",
+            tag: "should_start_device_deletion_fail"
+          )
+
+        false
+    end
   end
 
   defp purge_expired_interfaces(state, timestamp) do
@@ -1768,13 +2043,13 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
 
   defp maybe_handle_cache_miss(nil, interface_name, state, db_client) do
     with {:ok, major_version} <-
-           DeviceQueries.interface_version(db_client, state.device_id, interface_name),
+           DeviceQueries.interface_version(state.realm, state.device_id, interface_name),
          {:ok, interface_row} <-
-           InterfaceQueries.retrieve_interface_row(db_client, interface_name, major_version),
+           InterfaceQueries.retrieve_interface_row(state.realm, interface_name, major_version),
          %InterfaceDescriptor{interface_id: interface_id} = interface_descriptor <-
            InterfaceDescriptor.from_db_result!(interface_row),
          {:ok, mappings} <-
-           Mappings.fetch_interface_mappings_map(db_client, interface_id),
+           Mappings.fetch_interface_mappings_map(state.realm, interface_id),
          new_interfaces_by_expiry <-
            state.interfaces_by_expiry ++
              [{state.last_seen_message + @interface_lifespan_decimicroseconds, interface_name}],
@@ -1832,7 +2107,7 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
         {:error, :interface_loading_failed}
 
       other ->
-        Logger.warn("maybe_handle_cache_miss failed: #{inspect(other)}")
+        Logger.warning("maybe_handle_cache_miss failed: #{inspect(other)}")
         {:error, :interface_loading_failed}
     end
   end
@@ -1880,7 +2155,7 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
           {:ok, new_state}
 
         interface_descriptor.ownership != :device ->
-          Logger.warn("Tried to prune server owned interface: #{interface}.")
+          Logger.warning("Tried to prune server owned interface: #{interface}.")
           {:error, :maybe_outdated_introspection}
 
         true ->
@@ -1915,10 +2190,14 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
           i_name = interface_descriptor.name
 
           Enum.each(path_removed_triggers, fn trigger ->
-            targets = trigger.trigger_targets
+            target_with_policy_list =
+              trigger.trigger_targets
+              |> Enum.map(fn target ->
+                {target, Map.get(state.trigger_id_to_policy_name, target.parent_trigger_id)}
+              end)
 
             TriggersHandler.path_removed(
-              targets,
+              target_with_policy_list,
               state.realm,
               device_id_string,
               i_name,
@@ -1944,11 +2223,16 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
       state.interface_exchanged_bytes
     )
 
-    trigger_targets = Map.get(state.device_triggers, :on_device_disconnection, [])
+    trigger_target_with_policy_list =
+      Map.get(state.device_triggers, :on_device_disconnection, [])
+      |> Enum.map(fn target ->
+        {target, Map.get(state.trigger_id_to_policy_name, target.parent_trigger_id)}
+      end)
+
     device_id_string = Device.encode_device_id(state.device_id)
 
     TriggersHandler.device_disconnected(
-      trigger_targets,
+      trigger_target_with_policy_list,
       state.realm,
       device_id_string,
       timestamp_ms
@@ -1967,7 +2251,7 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
          %State{realm: realm, device_id: device_id} = state,
          timestamp
        ) do
-    Logger.warn("Disconnecting client and asking clean session.")
+    Logger.warning("Disconnecting client and asking clean session.")
 
     encoded_device_id = Device.encode_device_id(device_id)
 
@@ -1988,7 +2272,7 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
       {:ok, new_state}
     else
       {:error, reason} ->
-        Logger.warn("Disconnect failed due to error: #{inspect(reason)}")
+        Logger.warning("Disconnect failed due to error: #{inspect(reason)}")
         # TODO: die gracefully here
         {:error, :clean_session_failed}
     end
@@ -1996,6 +2280,24 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
 
   defp force_disconnection(realm, encoded_device_id) do
     case VMQPlugin.disconnect("#{realm}/#{encoded_device_id}", true) do
+      # Successfully disconnected
+      :ok ->
+        :ok
+
+      # Not found means it was already disconnected, succeed anyway
+      {:error, :not_found} ->
+        :ok
+
+      # Some other error, return it
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp force_device_deletion_from_broker(realm, encoded_device_id) do
+    _ = Logger.info("Disconnecting device to be deleted, device_id #{encoded_device_id}")
+
+    case VMQPlugin.delete(realm, encoded_device_id) do
       # Successfully disconnected
       :ok ->
         :ok
@@ -2150,51 +2452,79 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
     ]
 
     next_data_triggers = Map.put(data_triggers, data_trigger_key, new_data_triggers_for_key)
+
     Map.put(state, :data_triggers, next_data_triggers)
-  end
-
-  # TODO: implement on_incoming_introspection, on_interface_minor_updated
-  defp load_trigger(
-         state,
-         {:introspection_trigger, proto_buf_introspection_trigger},
-         trigger_target
-       ) do
-    introspection_triggers = state.introspection_triggers
-
-    event_type = EventTypeUtils.pretty_change_type(proto_buf_introspection_trigger.change_type)
-
-    introspection_trigger_key =
-      {event_type, proto_buf_introspection_trigger.match_interface || :any_interface}
-
-    existing_trigger_targets = Map.get(introspection_triggers, introspection_trigger_key, [])
-
-    new_targets = [trigger_target | existing_trigger_targets]
-
-    next_introspection_triggers =
-      Map.put(introspection_triggers, introspection_trigger_key, new_targets)
-
-    # Register the new target
-    :ok = TriggersHandler.register_target(trigger_target)
-
-    Map.put(state, :introspection_triggers, next_introspection_triggers)
+    |> maybe_cache_trigger_policy(trigger_target)
   end
 
   # TODO: implement on_empty_cache_received
   defp load_trigger(state, {:device_trigger, proto_buf_device_trigger}, trigger_target) do
     device_triggers = state.device_triggers
 
+    # device event type is one of
+    # :on_device_connected, :on_device_disconnected, :on_device_empty_cache_received, :on_device_error,
+    # :on_incoming_introspection, :on_interface_added, :on_interface_removed, :on_interface_minor_updated
     event_type =
       EventTypeUtils.pretty_device_event_type(proto_buf_device_trigger.device_event_type)
 
-    existing_trigger_targets = Map.get(device_triggers, event_type, [])
+    # introspection triggers have a pair as key, standard device ones do not
+    trigger_key = device_trigger_to_key(event_type, proto_buf_device_trigger)
+
+    existing_trigger_targets = Map.get(device_triggers, trigger_key, [])
 
     new_targets = [trigger_target | existing_trigger_targets]
 
     # Register the new target
     :ok = TriggersHandler.register_target(trigger_target)
 
-    next_device_triggers = Map.put(device_triggers, event_type, new_targets)
+    next_device_triggers = Map.put(device_triggers, trigger_key, new_targets)
+    # Map.put(state, :introspection_triggers, next_introspection_triggers)
     Map.put(state, :device_triggers, next_device_triggers)
+    |> maybe_cache_trigger_policy(trigger_target)
+  end
+
+  defp device_trigger_to_key(event_type, proto_buf_device_trigger) do
+    case event_type do
+      :on_interface_added ->
+        {event_type, introspection_trigger_interface(proto_buf_device_trigger)}
+
+      :on_interface_removed ->
+        {event_type, introspection_trigger_interface(proto_buf_device_trigger)}
+
+      :on_interface_minor_updated ->
+        {event_type, introspection_trigger_interface(proto_buf_device_trigger)}
+
+      # other device triggers do not care about interfaces
+      _ ->
+        event_type
+    end
+  end
+
+  defp introspection_trigger_interface(%ProtobufDeviceTrigger{
+         interface_name: interface_name,
+         interface_major: interface_major
+       }) do
+    SimpleTriggersProtobufUtils.get_interface_id_or_any(interface_name, interface_major)
+  end
+
+  # TODO: consider what we should to with the cached policy if/when we allow updating a policy
+  defp maybe_cache_trigger_policy(state, %AMQPTriggerTarget{parent_trigger_id: parent_trigger_id}) do
+    %State{realm: realm_name, trigger_id_to_policy_name: trigger_id_to_policy_name} = state
+
+    case PolicyQueries.retrieve_policy_name(
+           realm_name,
+           parent_trigger_id
+         ) do
+      {:ok, policy_name} ->
+        next_trigger_id_to_policy_name =
+          Map.put(trigger_id_to_policy_name, parent_trigger_id, policy_name)
+
+        %{state | trigger_id_to_policy_name: next_trigger_id_to_policy_name}
+
+      # @default policy is not installed, so here are triggers without policy
+      {:error, :policy_not_found} ->
+        state
+    end
   end
 
   defp resolve_path(path, interface_descriptor, mappings) do
@@ -2207,14 +2537,17 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
         else
           :error ->
             # Map.fetch failed
-            Logger.warn(
+            Logger.warning(
               "endpoint_id for path #{inspect(path)} not found in mappings #{inspect(mappings)}."
             )
 
             {:error, :mapping_not_found}
 
           {:error, reason} ->
-            Logger.warn("EndpointsAutomaton.resolve_path failed with reason #{inspect(reason)}.")
+            Logger.warning(
+              "EndpointsAutomaton.resolve_path failed with reason #{inspect(reason)}."
+            )
+
             {:error, :mapping_not_found}
 
           {:guessed, guessed_endpoints} ->
@@ -2242,7 +2575,7 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
         else
           {:ok, _endpoint_id} ->
             # This is invalid here, publish doesn't happen on endpoints in object aggregated interfaces
-            Logger.warn(
+            Logger.warning(
               "Tried to publish on endpoint #{inspect(path)} for object aggregated " <>
                 "interface #{inspect(interface_descriptor.name)}. You should publish on " <>
                 "the common prefix",
@@ -2252,7 +2585,7 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
             {:error, :mapping_not_found}
 
           {:error, :not_found} ->
-            Logger.warn(
+            Logger.warning(
               "Tried to publish on invalid path #{inspect(path)} for object aggregated " <>
                 "interface #{inspect(interface_descriptor.name)}",
               tag: "invalid_path"
@@ -2261,7 +2594,7 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
             {:error, :mapping_not_found}
 
           {:error, :invalid_object_aggregation_path} ->
-            Logger.warn(
+            Logger.warning(
               "Tried to publish on invalid path #{inspect(path)} for object aggregated " <>
                 "interface #{inspect(interface_descriptor.name)}",
               tag: "invalid_path"
@@ -2333,7 +2666,7 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
             gather_interface_properties(new_state, db_client, interface_descriptor)
 
           {:error, :interface_loading_failed} ->
-            Logger.warn("Failed #{interface} interface loading.")
+            Logger.warning("Failed #{interface} interface loading.")
             []
         end
       end)
@@ -2374,7 +2707,7 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
         {:cont, {:ok, new_state}}
       else
         {:error, :interface_loading_failed} ->
-          Logger.warn("Failed #{interface} interface loading.")
+          Logger.warning("Failed #{interface} interface loading.")
           {:halt, {:error, :sending_properties_to_interface_failed}}
 
         {:error, reason} ->
@@ -2425,7 +2758,8 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
 
       {:ok, %{local_matches: local, remote_matches: remote}} when local + remote > 1 ->
         # This should not happen so we print a warning, but we consider it a succesful publish
-        Logger.warn("Multiple match while publishing #{inspect(payload)} on #{topic}.",
+        Logger.warning(
+          "Multiple match while publishing #{inspect(Base.encode64(payload))} on #{topic}.",
           tag: "publish_multiple_matches"
         )
 
@@ -2453,7 +2787,7 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Impl do
 
       {:ok, %{local_matches: local, remote_matches: remote}} when local + remote > 1 ->
         # This should not happen so we print a warning, but we consider it a succesful publish
-        Logger.warn(
+        Logger.warning(
           "Multiple match while publishing #{inspect(encapsulated_value)} on #{topic}.",
           tag: "publish_multiple_matches"
         )

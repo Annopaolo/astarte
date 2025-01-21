@@ -16,15 +16,17 @@ on:
     paths:
     - 'apps/**'
     - '.github/workflows/astarte-apps-build-workflow.yaml'
+  # Allow this workflow to be called  by others
+  workflow_call:
 
 env:
-  elixir_version: "1.11.4"
-  otp_version: "23.2"
+  elixir_version: "1.15"
+  otp_version: "26.1"
 
 jobs:
   test-dialyzer:
     name: Check Dialyzer
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:
@@ -44,7 +46,7 @@ jobs:
     - uses: actions/checkout@v2
     - uses: actions/cache@v1
       with:
-        path: apps/${{ matrix.app }}/deps
+        path: apps/${{ matrix.app }}/deps
         key: ${{ runner.os }}-dialyzer-mix-${{ env.otp_version }}-${{ env.elixir_version }}-${{ matrix.app }}-${{ hashFiles(format('{0}{1}{2}{3}', github.workspace, '/apps/', matrix.app, '/mix.lock')) }}
         restore-keys: |
           ${{ runner.os }}-dialyzer-mix-${{ env.otp_version }}-${{ env.elixir_version }}-${{ matrix.app }}-
@@ -55,18 +57,23 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-dialyzer-_build-${{ env.otp_version }}-${{ env.elixir_version }}-${{ matrix.app }}-
     - uses: actions/cache@v1
+      id: plt_cache
       with:
         path: apps/${{ matrix.app }}/dialyzer_cache
         key: ${{ runner.os }}-dialyzer_cache-${{ env.otp_version }}-${{ env.elixir_version }}-${{ matrix.app }}-${{ github.sha }}
         restore-keys: |
           ${{ runner.os }}-dialyzer_cache-${{ env.otp_version }}-${{ env.elixir_version }}-${{ matrix.app }}-
-    - uses: erlef/setup-beam@v1.7.0
+    - uses: erlef/setup-beam@v1.15
       with:
         otp-version: ${{ env.otp_version }}
         elixir-version: ${{ env.elixir_version }}
     - name: Install Dependencies
       working-directory: ./apps/${{ matrix.app }}
       run: mix deps.get
+    - name: Create PLTs dir
+      working-directory: ./apps/${{ matrix.app }}
+      if: ${{ steps.plt_cache.outputs.cache-hit != 'true' }}
+      run: mkdir -p dialyzer_cache && mix dialyzer --plt
     - name: Run dialyzer
       working-directory: ./apps/${{ matrix.app }}
       # FIXME: This should be set to fail when dialyzer issues are fixed
@@ -74,7 +81,7 @@ jobs:
 
   test-coverage:
     name: Build and Test
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     # Wait for Dialyzer to give it a go before building
     needs:
       - test-dialyzer
@@ -92,10 +99,10 @@ jobs:
         - astarte_realm_management_api
         - astarte_trigger_engine
         database:
-        - "cassandra:3.11.10"
-        - "scylladb/scylla:4.4.3"
+        - "cassandra:3.11.15"
+        - "scylladb/scylla:5.2.2"
         rabbitmq:
-        - "rabbitmq:3.8.16-management"
+        - "rabbitmq:3.12.0-management"
     services:
       rabbitmq:
         image: ${{ matrix.rabbitmq }}
@@ -118,17 +125,19 @@ jobs:
     - uses: actions/checkout@v2
     - uses: actions/cache@v1
       with:
-        path: apps/${{ matrix.app }}/deps
+        path: apps/${{ matrix.app }}/deps
         key: ${{ runner.os }}-apps-mix-${{ env.otp_version }}-${{ env.elixir_version }}-${{ matrix.app }}-${{ hashFiles(format('{0}{1}{2}{3}', github.workspace, '/apps/', matrix.app, '/mix.lock')) }}
         restore-keys: |
           ${{ runner.os }}-apps-mix-${{ env.otp_version }}-${{ env.elixir_version }}-${{ matrix.app }}-
-    - uses: actions/cache@v1
-      with:
-        path: apps/${{ matrix.app }}/_build
-        key: ${{ runner.os }}-apps-_build-${{ env.otp_version }}-${{ env.elixir_version }}-${{ matrix.app }}-${{ github.sha }}
-        restore-keys: |
-          ${{ runner.os }}-apps-_build-${{ env.otp_version }}-${{ env.elixir_version }}-${{ matrix.app }}-
-    - uses: erlef/setup-beam@v1.7.0
+    # Caching _build is causing tests to fail rather unexpectedly.
+    # TODO try to undestand why and restore the cache step.
+    # - uses: actions/cache@v1
+    #   with:
+    #     path: apps/${{ matrix.app }}/_build
+    #     key: ${{ runner.os }}-apps-_build-${{ env.otp_version }}-${{ env.elixir_version }}-${{ matrix.app }}-${{ github.sha }}
+    #     restore-keys: |
+    #       ${{ runner.os }}-apps-_build-${{ env.otp_version }}-${{ env.elixir_version }}-${{ matrix.app }}-
+    - uses: erlef/setup-beam@v1.15
       with:
         otp-version: ${{ env.otp_version }}
         elixir-version: ${{ env.elixir_version }}
@@ -147,7 +156,7 @@ jobs:
         rm rabbitmqadmin
     - name: Compile
       working-directory: ./apps/${{ matrix.app }}
-      run: mix do compile
+      run: mix compile --warnings-as-errors --force
     - uses: actions/setup-node@v1
       with:
         node-version: '10.x'
@@ -162,6 +171,11 @@ jobs:
         CFSSL_API_URL: http://localhost:${{ job.services.cfssl.ports[8080] }}
     - name: Upload Coverage Results to CodeCov
       # Don't upload more than once per component
-      if: matrix.database == 'scylladb/scylla:4.4.3'
-      working-directory: ./apps/${{ matrix.app }}
-      run: bash <(curl -s https://codecov.io/bash)
+      if: matrix.database == 'scylladb/scylla:5.2.2'
+      uses: codecov/codecov-action@v4
+      with:
+        fail_ci_if_error: true #default = false
+        token: ${{ secrets.CODECOV_TOKEN }}
+        verbose: true #default = false
+        working-directory: ./apps/${{ matrix.app }}
+        directory: ./coverage_results

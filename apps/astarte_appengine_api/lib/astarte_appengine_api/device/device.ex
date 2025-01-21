@@ -1,7 +1,7 @@
 #
 # This file is part of Astarte.
 #
-# Copyright 2017 Ispirata Srl
+# Copyright 2017-2023 Ispirata Srl
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -24,6 +24,7 @@ defmodule Astarte.AppEngine.API.Device do
   alias Astarte.AppEngine.API.Device.DevicesListOptions
   alias Astarte.AppEngine.API.Device.DeviceStatus
   alias Astarte.AppEngine.API.Device.MapTree
+  alias Astarte.AppEngine.API.Device.InterfaceValue
   alias Astarte.AppEngine.API.Device.InterfaceValues
   alias Astarte.AppEngine.API.Device.InterfaceValuesOptions
   alias Astarte.AppEngine.API.Device.Queries
@@ -40,6 +41,7 @@ defmodule Astarte.AppEngine.API.Device do
   alias Astarte.DataAccess.Device, as: DeviceQueries
   alias Astarte.DataAccess.Interface, as: InterfaceQueries
   alias Ecto.Changeset
+  alias Astarte.Core.CQLUtils
   require Logger
 
   def list_devices!(realm_name, params) do
@@ -90,7 +92,10 @@ defmodule Astarte.AppEngine.API.Device do
   defp update_attributes(client, device_id, attributes) do
     Enum.reduce_while(attributes, :ok, fn
       {"", _attribute_value}, _acc ->
-        Logger.warn("Attribute key cannot be an empty string.", tag: :invalid_attribute_empty_key)
+        Logger.warning("Attribute key cannot be an empty string.",
+          tag: :invalid_attribute_empty_key
+        )
+
         {:halt, {:error, :invalid_attributes}}
 
       {attribute_key, nil}, _acc ->
@@ -116,11 +121,11 @@ defmodule Astarte.AppEngine.API.Device do
   defp update_aliases(client, device_id, aliases) do
     Enum.reduce_while(aliases, :ok, fn
       {_alias_key, ""}, _acc ->
-        Logger.warn("Alias value cannot be an empty string.", tag: :invalid_alias_empty_value)
+        Logger.warning("Alias value cannot be an empty string.", tag: :invalid_alias_empty_value)
         {:halt, {:error, :invalid_alias}}
 
       {"", _alias_value}, _acc ->
-        Logger.warn("Alias key cannot be an empty string.", tag: :invalid_alias_empty_key)
+        Logger.warning("Alias key cannot be an empty string.", tag: :invalid_alias_empty_key)
         {:halt, {:error, :invalid_alias}}
 
       {alias_key, nil}, _acc ->
@@ -172,9 +177,10 @@ defmodule Astarte.AppEngine.API.Device do
     with {:ok, options} <- Changeset.apply_action(changeset, :insert),
          {:ok, client} <- Database.connect(realm: realm_name),
          {:ok, device_id} <- Device.decode_device_id(encoded_device_id),
-         {:ok, major_version} <- DeviceQueries.interface_version(client, device_id, interface),
+         {:ok, major_version} <-
+           DeviceQueries.interface_version(realm_name, device_id, interface),
          {:ok, interface_row} <-
-           InterfaceQueries.retrieve_interface_row(client, interface, major_version) do
+           InterfaceQueries.retrieve_interface_row(realm_name, interface, major_version) do
       do_get_interface_values!(
         client,
         device_id,
@@ -196,9 +202,10 @@ defmodule Astarte.AppEngine.API.Device do
     with {:ok, options} <- Changeset.apply_action(changeset, :insert),
          {:ok, client} <- Database.connect(realm: realm_name),
          {:ok, device_id} <- Device.decode_device_id(encoded_device_id),
-         {:ok, major_version} <- DeviceQueries.interface_version(client, device_id, interface),
+         {:ok, major_version} <-
+           DeviceQueries.interface_version(realm_name, device_id, interface),
          {:ok, interface_row} <-
-           InterfaceQueries.retrieve_interface_row(client, interface, major_version),
+           InterfaceQueries.retrieve_interface_row(realm_name, interface, major_version),
          path <- "/" <> no_prefix_path,
          {:ok, interface_descriptor} <- InterfaceDescriptor.from_db_result(interface_row),
          {:ok, endpoint_ids} <-
@@ -230,7 +237,7 @@ defmodule Astarte.AppEngine.API.Device do
     with {:ok, [endpoint_id]} <- get_endpoint_ids(interface_descriptor.automaton, path),
          mapping <-
            Queries.retrieve_mapping(client, interface_descriptor.interface_id, endpoint_id),
-         {:ok, value} <- cast_value(mapping.value_type, raw_value),
+         {:ok, value} <- InterfaceValue.cast_value(mapping.value_type, raw_value),
          :ok <- validate_value_type(mapping.value_type, value),
          wrapped_value = wrap_to_bson_struct(mapping.value_type, value),
          interface_type = interface_descriptor.type,
@@ -299,15 +306,15 @@ defmodule Astarte.AppEngine.API.Device do
        }}
     else
       {:error, :endpoint_guess_not_allowed} ->
-        _ = Logger.warn("Incomplete path not allowed.", tag: "endpoint_guess_not_allowed")
+        _ = Logger.warning("Incomplete path not allowed.", tag: "endpoint_guess_not_allowed")
         {:error, :read_only_resource}
 
       {:error, :unexpected_value_type, expected: value_type} ->
-        _ = Logger.warn("Unexpected value type.", tag: "unexpected_value_type")
+        _ = Logger.warning("Unexpected value type.", tag: "unexpected_value_type")
         {:error, :unexpected_value_type, expected: value_type}
 
       {:error, reason} ->
-        _ = Logger.warn("Error while writing to interface.", tag: "write_to_device_error")
+        _ = Logger.warning("Error while writing to interface.", tag: "write_to_device_error")
         {:error, reason}
     end
   end
@@ -341,7 +348,7 @@ defmodule Astarte.AppEngine.API.Device do
     else
       {:ok, _endpoint_id} ->
         # This is invalid here, publish doesn't happen on endpoints in object aggregated interfaces
-        Logger.warn(
+        Logger.warning(
           "Tried to publish on endpoint #{inspect(path)} for object aggregated " <>
             "interface #{inspect(interface_descriptor.name)}. You should publish on " <>
             "the common prefix",
@@ -351,7 +358,7 @@ defmodule Astarte.AppEngine.API.Device do
         {:error, :mapping_not_found}
 
       {:error, :not_found} ->
-        Logger.warn(
+        Logger.warning(
           "Tried to publish on invalid path #{inspect(path)} for object aggregated " <>
             "interface #{inspect(interface_descriptor.name)}",
           tag: "invalid_path"
@@ -360,7 +367,7 @@ defmodule Astarte.AppEngine.API.Device do
         {:error, :mapping_not_found}
 
       {:error, :invalid_object_aggregation_path} ->
-        Logger.warn(
+        Logger.warning(
           "Tried to publish on invalid path #{inspect(path)} for object aggregated " <>
             "interface #{inspect(interface_descriptor.name)}",
           tag: "invalid_path"
@@ -407,13 +414,17 @@ defmodule Astarte.AppEngine.API.Device do
       |> DateTime.to_unix(:microsecond)
 
     with {:ok, mappings} <-
-           Mappings.fetch_interface_mappings(client, interface_descriptor.interface_id),
+           Mappings.fetch_interface_mappings(
+             realm_name,
+             interface_descriptor.interface_id
+           ),
          {:ok, endpoint} <-
            resolve_object_aggregation_path(path, interface_descriptor, mappings),
          endpoint_id <- endpoint.endpoint_id,
          expected_types <- extract_expected_types(mappings),
-         :ok <- validate_value_type(expected_types, raw_value),
-         wrapped_value = wrap_to_bson_struct(nil, raw_value),
+         {:ok, value} <- InterfaceValue.cast_value(expected_types, raw_value),
+         :ok <- validate_value_type(expected_types, value),
+         wrapped_value = wrap_to_bson_struct(expected_types, value),
          reliability = extract_aggregate_reliability(mappings),
          interface_type = interface_descriptor.type,
          publish_opts = build_publish_opts(interface_type, reliability),
@@ -447,7 +458,7 @@ defmodule Astarte.AppEngine.API.Device do
         nil,
         nil,
         path,
-        raw_value,
+        value,
         timestamp_micro,
         opts
       )
@@ -469,11 +480,11 @@ defmodule Astarte.AppEngine.API.Device do
        }}
     else
       {:error, :unexpected_value_type, expected: value_type} ->
-        Logger.warn("Unexpected value type.", tag: "unexpected_value_type")
+        Logger.warning("Unexpected value type.", tag: "unexpected_value_type")
         {:error, :unexpected_value_type, expected: value_type}
 
       {:error, :invalid_object_aggregation_path} ->
-        Logger.warn("Error while trying to publish on path for object aggregated interface.",
+        Logger.warning("Error while trying to publish on path for object aggregated interface.",
           tag: "invalid_object_aggregation_path"
         )
 
@@ -483,11 +494,13 @@ defmodule Astarte.AppEngine.API.Device do
         {:error, :mapping_not_found}
 
       {:error, :database_error} ->
-        Logger.warn("Error while trying to retrieve ttl.", tag: "database_error")
+        Logger.warning("Error while trying to retrieve ttl.", tag: "database_error")
         {:error, :database_error}
 
       {:error, reason} ->
-        Logger.warn("Unhandled error while updating object interface values: #{inspect(reason)}.")
+        Logger.warning(
+          "Unhandled error while updating object interface values: #{inspect(reason)}."
+        )
 
         {:error, reason}
     end
@@ -503,9 +516,10 @@ defmodule Astarte.AppEngine.API.Device do
       ) do
     with {:ok, client} <- Database.connect(realm: realm_name),
          {:ok, device_id} <- Device.decode_device_id(encoded_device_id),
-         {:ok, major_version} <- DeviceQueries.interface_version(client, device_id, interface),
+         {:ok, major_version} <-
+           DeviceQueries.interface_version(realm_name, device_id, interface),
          {:ok, interface_row} <-
-           InterfaceQueries.retrieve_interface_row(client, interface, major_version),
+           InterfaceQueries.retrieve_interface_row(realm_name, interface, major_version),
          {:ok, interface_descriptor} <- InterfaceDescriptor.from_db_result(interface_row),
          {:ownership, :server} <- {:ownership, interface_descriptor.ownership},
          path <- "/" <> no_prefix_path do
@@ -530,11 +544,11 @@ defmodule Astarte.AppEngine.API.Device do
       end
     else
       {:ownership, :device} ->
-        _ = Logger.warn("Invalid write (device owned).", tag: "cannot_write_to_device_owned")
+        _ = Logger.warning("Invalid write (device owned).", tag: "cannot_write_to_device_owned")
         {:error, :cannot_write_to_device_owned}
 
       {:error, reason} ->
-        _ = Logger.warn("Error while writing to interface.", tag: "write_to_device_error")
+        _ = Logger.warning("Error while writing to interface.", tag: "write_to_device_error")
         {:error, reason}
     end
   end
@@ -562,29 +576,6 @@ defmodule Astarte.AppEngine.API.Device do
 
   defp build_publish_opts(:datastream, reliability) do
     [type: :datastream, reliability: reliability]
-  end
-
-  defp ensure_unset(realm, device_id, interface, path) do
-    with {:ok, %{local_matches: local_matches, remote_matches: remote_matches}} <-
-           DataTransmitter.unset_property(realm, device_id, interface, path) do
-      case local_matches + remote_matches do
-        0 ->
-          {:error, :cannot_push_to_device}
-
-        1 ->
-          :ok
-
-        matches when matches > 1 ->
-          # Multiple matches, we print a warning but we consider it ok
-          Logger.warn(
-            "Multiple matches while sending unset to device, " <>
-              "local_matches: #{local_matches}, remote_matches: #{remote_matches}",
-            tag: "publish_multiple_matches"
-          )
-
-          :ok
-      end
-    end
   end
 
   defp ensure_publish(realm, device_id, interface, path, value, opts) do
@@ -631,7 +622,7 @@ defmodule Astarte.AppEngine.API.Device do
   # Multiple matches, we print a warning but we consider it ok
   defp ensure_publish_reliability(local_matches, remote_matches, _opts)
        when local_matches + remote_matches > 1 do
-    Logger.warn(
+    Logger.warning(
       "Multiple matches while publishing to device, " <>
         "local_matches: #{local_matches}, remote_matches: #{remote_matches}",
       tag: "publish_multiple_matches"
@@ -699,82 +690,6 @@ defmodule Astarte.AppEngine.API.Device do
     end
   end
 
-  defp cast_value(:datetime, value) when is_binary(value) do
-    with {:ok, datetime, _utc_off} <- DateTime.from_iso8601(value) do
-      {:ok, datetime}
-    else
-      {:error, _reason} ->
-        {:error, :unexpected_value_type, expected: :datetime}
-    end
-  end
-
-  defp cast_value(:datetime, value) when is_integer(value) do
-    with {:ok, datetime} <- DateTime.from_unix(value, :millisecond) do
-      {:ok, datetime}
-    else
-      {:error, _reason} ->
-        {:error, :unexpected_value_type, expected: :datetime}
-    end
-  end
-
-  defp cast_value(:datetime, _value) do
-    {:error, :unexpected_value_type, expected: :datetime}
-  end
-
-  defp cast_value(:binaryblob, value) when is_binary(value) do
-    with {:ok, binvalue} <- Base.decode64(value) do
-      {:ok, binvalue}
-    else
-      :error ->
-        {:error, :unexpected_value_type, expected: :binaryblob}
-    end
-  end
-
-  defp cast_value(:binaryblob, _value) do
-    {:error, :unexpected_value_type, expected: :binaryblob}
-  end
-
-  defp cast_value(:datetimearray, values) do
-    case map_while_ok(values, &cast_value(:datetime, &1)) do
-      {:ok, mapped_values} ->
-        {:ok, mapped_values}
-
-      _ ->
-        {:error, :unexpected_value_type, expected: :datetimearray}
-    end
-  end
-
-  defp cast_value(:binaryblobarray, values) do
-    case map_while_ok(values, &cast_value(:binaryblob, &1)) do
-      {:ok, mapped_values} ->
-        {:ok, mapped_values}
-
-      _ ->
-        {:error, :unexpected_value_type, expected: :binaryblobarray}
-    end
-  end
-
-  defp cast_value(_anytype, anyvalue) do
-    {:ok, anyvalue}
-  end
-
-  defp map_while_ok(values, fun) do
-    result =
-      Enum.reduce_while(values, {:ok, []}, fn value, {:ok, acc} ->
-        case fun.(value) do
-          {:ok, mapped_value} ->
-            {:cont, {:ok, [mapped_value | acc]}}
-
-          other ->
-            {:halt, other}
-        end
-      end)
-
-    with {:ok, mapped_values} <- result do
-      {:ok, Enum.reverse(mapped_values)}
-    end
-  end
-
   defp wrap_to_bson_struct(:binaryblob, value) do
     # 0 is generic binary subtype
     {0, value}
@@ -782,6 +697,16 @@ defmodule Astarte.AppEngine.API.Device do
 
   defp wrap_to_bson_struct(:binaryblobarray, values) do
     Enum.map(values, &wrap_to_bson_struct(:binaryblob, &1))
+  end
+
+  defp wrap_to_bson_struct(expected_types, values)
+       when is_map(expected_types) and is_map(values) do
+    Enum.map(values, fn {key, value} ->
+      # We can be sure this exists since we validated it in validate_value_type
+      type = Map.fetch!(expected_types, key)
+      {key, wrap_to_bson_struct(type, value)}
+    end)
+    |> Enum.into(%{})
   end
 
   defp wrap_to_bson_struct(_anytype, value) do
@@ -793,9 +718,10 @@ defmodule Astarte.AppEngine.API.Device do
   def delete_interface_values(realm_name, encoded_device_id, interface, no_prefix_path) do
     with {:ok, client} <- Database.connect(realm: realm_name),
          {:ok, device_id} <- Device.decode_device_id(encoded_device_id),
-         {:ok, major_version} <- DeviceQueries.interface_version(client, device_id, interface),
+         {:ok, major_version} <-
+           DeviceQueries.interface_version(realm_name, device_id, interface),
          {:ok, interface_row} <-
-           InterfaceQueries.retrieve_interface_row(client, interface, major_version),
+           InterfaceQueries.retrieve_interface_row(realm_name, interface, major_version),
          {:ok, interface_descriptor} <- InterfaceDescriptor.from_db_result(interface_row),
          {:ownership, :server} <- {:ownership, interface_descriptor.ownership},
          path <- "/" <> no_prefix_path,
@@ -816,7 +742,7 @@ defmodule Astarte.AppEngine.API.Device do
 
       case interface_descriptor.type do
         :properties ->
-          ensure_unset(realm_name, device_id, interface, path)
+          unset_property(realm_name, device_id, interface, path)
 
         :datastream ->
           :ok
@@ -830,6 +756,15 @@ defmodule Astarte.AppEngine.API.Device do
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  defp unset_property(realm_name, device_id, interface, path) do
+    # Do not check for matches, as the device receives the unset information anyway
+    # (either when it reconnects or in the /control/consumerProperties message).
+    # See https://github.com/astarte-platform/astarte/issues/640
+    with {:ok, _} <- DataTransmitter.unset_property(realm_name, device_id, interface, path) do
+      :ok
     end
   end
 
@@ -893,48 +828,36 @@ defmodule Astarte.AppEngine.API.Device do
          path,
          opts
        ) do
-    {status, result} =
-      List.foldl(endpoint_ids, {:ok, %{}}, fn endpoint_id, {status, values} ->
-        if status == :ok do
-          endpoint_row = Queries.execute_value_type_query(client, endpoint_query, endpoint_id)
+    result =
+      List.foldl(endpoint_ids, %{}, fn endpoint_id, values ->
+        endpoint_row = Queries.execute_value_type_query(client, endpoint_query, endpoint_id)
 
-          value =
-            retrieve_endpoint_values(
-              client,
-              device_id,
-              :individual,
-              :properties,
-              interface_row,
-              endpoint_id,
-              endpoint_row,
-              path,
-              opts
-            )
+        value =
+          retrieve_endpoint_values(
+            client,
+            device_id,
+            :individual,
+            :properties,
+            interface_row,
+            endpoint_id,
+            endpoint_row,
+            path,
+            opts
+          )
 
-          if value != %{} do
-            {:ok, Map.merge(values, value)}
-          else
-            {:error, :path_not_found}
-          end
-        else
-          {status, values}
-        end
+        Map.merge(values, value)
       end)
 
-    if status == :ok do
-      individual_value = Map.get(result, "")
+    individual_value = Map.get(result, "")
 
-      data =
-        if individual_value != nil do
-          individual_value
-        else
-          MapTree.inflate_tree(result)
-        end
+    data =
+      if individual_value != nil do
+        individual_value
+      else
+        MapTree.inflate_tree(result)
+      end
 
-      {:ok, %InterfaceValues{data: data}}
-    else
-      {:error, result}
-    end
+    {:ok, %InterfaceValues{data: data}}
   end
 
   defp do_get_interface_values!(
@@ -1095,7 +1018,7 @@ defmodule Astarte.AppEngine.API.Device do
                 AstarteValue.to_json_friendly(
                   v,
                   ValueType.from_int(endpoint_row[:value_type]),
-                  allow_bigintegers: true
+                  fetch_biginteger_opts_or_default(opts)
                 )
 
               Map.put(values_map, simplified_path, %{
@@ -1176,7 +1099,7 @@ defmodule Astarte.AppEngine.API.Device do
           {:ok, interface_values}
         else
           err ->
-            Logger.warn("An error occurred while retrieving endpoint values: #{inspect(err)}",
+            Logger.warning("An error occurred while retrieving endpoint values: #{inspect(err)}",
               tag: "retrieve_endpoint_values_error"
             )
 
@@ -1305,7 +1228,7 @@ defmodule Astarte.AppEngine.API.Device do
          endpoint_id,
          endpoint_row,
          path,
-         _opts
+         opts
        ) do
     values =
       Queries.all_properties_for_endpoint!(
@@ -1325,7 +1248,7 @@ defmodule Astarte.AppEngine.API.Device do
             AstarteValue.to_json_friendly(
               row_value,
               ValueType.from_int(endpoint_row[:value_type]),
-              allow_bigintegers: true
+              fetch_biginteger_opts_or_default(opts)
             )
 
           Map.put(values_map, simplified_path, nice_value)
@@ -1370,7 +1293,7 @@ defmodule Astarte.AppEngine.API.Device do
   defp maybe_downsample_to(values, nil, _aggregation, _opts) do
     # TODO: we can't downsample an object without a valid count, propagate an error changeset
     # when we start using changeset consistently here
-    _ = Logger.warn("No valid count in maybe_downsample_to.", tag: "downsample_invalid_count")
+    _ = Logger.warning("No valid count in maybe_downsample_to.", tag: "downsample_invalid_count")
     values
   end
 
@@ -1378,7 +1301,7 @@ defmodule Astarte.AppEngine.API.Device do
     # TODO: we can't downsample an object without downsample_key, propagate an error changeset
     # when we start using changeset consistently here
     _ =
-      Logger.warn("No valid downsample_key found in maybe_downsample_to.",
+      Logger.warning("No valid downsample_key found in maybe_downsample_to.",
         tag: "downsample_invalid_key"
       )
 
@@ -1717,8 +1640,25 @@ defmodule Astarte.AppEngine.API.Device do
       Queries.device_alias_to_device_id(client, device_alias)
     else
       not_ok ->
-        _ = Logger.warn("Database error: #{inspect(not_ok)}.", tag: "db_error")
+        _ = Logger.warning("Database error: #{inspect(not_ok)}.", tag: "db_error")
         {:error, :database_error}
+    end
+  end
+
+  defp fetch_biginteger_opts_or_default(opts) do
+    allow_bigintegers = Map.get(opts, :allow_bigintegers)
+    allow_safe_bigintegers = Map.get(opts, :allow_safe_bigintegers)
+
+    cond do
+      allow_bigintegers ->
+        [allow_bigintegers: allow_bigintegers]
+
+      allow_safe_bigintegers ->
+        [allow_safe_bigintegers: allow_safe_bigintegers]
+
+      # Default allow_bigintegers to true in order to not break the existing API
+      true ->
+        [allow_bigintegers: true]
     end
   end
 end

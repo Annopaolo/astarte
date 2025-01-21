@@ -22,9 +22,9 @@ defmodule Astarte.TriggerEngine.Application do
   use Application
   require Logger
 
-  alias Astarte.TriggerEngine.AMQPEventsConsumer
   alias Astarte.TriggerEngine.Config
   alias Astarte.DataAccess.Config, as: DataAccessConfig
+  alias Astarte.TriggerEngine.DeliverySupervisor
 
   @app_version Mix.Project.config()[:version]
 
@@ -47,7 +47,7 @@ defmodule Astarte.TriggerEngine.Application do
     children = [
       Astarte.TriggerEngineWeb.Telemetry,
       {Xandra.Cluster, xandra_options},
-      AMQPEventsConsumer
+      DeliverySupervisor
     ]
 
     opts = [strategy: :one_for_one, name: Astarte.TriggerEngine.Supervisor]

@@ -19,12 +19,40 @@
 defmodule Astarte.Pairing.APIWeb.ErrorView do
   use Astarte.Pairing.APIWeb, :view
 
+  def render("400.json", _assigns) do
+    %{errors: %{detail: "Bad request"}}
+  end
+
   def render("401.json", _assigns) do
     %{errors: %{detail: "Unauthorized"}}
   end
 
   def render("403.json", _assigns) do
     %{errors: %{detail: "Forbidden"}}
+  end
+
+  def render("missing_token.json", _assigns) do
+    %{errors: %{detail: "Missing authorization token"}}
+  end
+
+  def render("invalid_token.json", _assigns) do
+    %{errors: %{detail: "Invalid JWT token"}}
+  end
+
+  def render("invalid_auth_path.json", _assigns) do
+    %{
+      errors: %{
+        detail: "Authorization failed due to an invalid path"
+      }
+    }
+  end
+
+  def render("authorization_path_not_matched.json", %{method: method, path: path}) do
+    %{
+      errors: %{
+        detail: "Unauthorized access to #{method} #{path}. Please verify your permissions"
+      }
+    }
   end
 
   def render("404.json", _assigns) do

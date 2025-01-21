@@ -26,6 +26,8 @@ defmodule Astarte.DataUpdaterPlant.Application do
 
   alias Astarte.DataUpdaterPlant.Config
   alias Astarte.DataAccess.Config, as: DataAccessConfig
+  alias Astarte.DataUpdaterPlant.Config
+  alias Astarte.DataUpdaterPlant.DataUpdater.Impl
 
   @app_version Mix.Project.config()[:version]
 
@@ -41,17 +43,37 @@ defmodule Astarte.DataUpdaterPlant.Application do
     Config.validate!()
     DataAccessConfig.validate!()
 
-    xandra_options =
-      Config.xandra_options!()
-      |> Keyword.put(:name, :xandra)
+    xandra_options = Config.xandra_options!()
+
+    data_access_opts = [xandra_options: xandra_options]
+
+    dup_xandra_opts = Keyword.put(xandra_options, :name, :xandra)
 
     children = [
       Astarte.DataUpdaterPlantWeb.Telemetry,
-      {Xandra.Cluster, xandra_options},
-      Astarte.DataUpdaterPlant.DataPipelineSupervisor
+      {Xandra.Cluster, dup_xandra_opts},
+      {Astarte.DataAccess, data_access_opts},
+      Astarte.DataUpdaterPlant.DataPipelineSupervisor,
+      {Mississippi.Consumer, mississippi_consumer_opts!()}
     ]
 
     opts = [strategy: :one_for_one, name: Astarte.DataUpdaterPlant.Supervisor]
     Supervisor.start_link(children, opts)
+  end
+
+  defp mississippi_consumer_opts!() do
+    [
+      amqp_consumer_options: Config.amqp_consumer_options!(),
+      mississippi_config: [
+        queues: [
+          events_exchange_name: Config.events_exchange_name!(),
+          prefix: Config.data_queue_prefix!(),
+          range_start: Config.data_queue_range_start!(),
+          range_end: Config.data_queue_range_end!(),
+          total_count: Config.data_queue_total_count!()
+        ],
+        message_handler: Impl
+      ]
+    ]
   end
 end

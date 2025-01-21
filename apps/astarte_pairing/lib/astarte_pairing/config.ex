@@ -50,7 +50,7 @@ defmodule Astarte.Pairing.Config do
     type: :binary
 
   def init! do
-    if {:ok, nil} = ca_cert() do
+    if {:ok, nil} == ca_cert() do
       case CFSSLCredentials.ca_cert() do
         {:ok, cert} ->
           put_ca_cert(cert)
@@ -78,4 +78,7 @@ defmodule Astarte.Pairing.Config do
 
   defdelegate xandra_options!, to: DataAccessConfig
   defdelegate cqex_options!, to: DataAccessConfig
+
+  defdelegate astarte_instance_id!, to: DataAccessConfig
+  defdelegate astarte_instance_id, to: DataAccessConfig
 end

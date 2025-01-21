@@ -2,6 +2,8 @@ defmodule Astarte.RealmManagement.Mock do
   alias Astarte.RPC.Protocol.RealmManagement.{
     Call,
     DeleteInterface,
+    GetDatastreamMaximumStorageRetention,
+    GetDatastreamMaximumStorageRetentionReply,
     GenericErrorReply,
     GenericOkReply,
     GetInterfaceSource,
@@ -16,10 +18,22 @@ defmodule Astarte.RealmManagement.Mock do
     InstallInterface,
     Reply,
     UpdateInterface,
-    UpdateJWTPublicKeyPEM
+    UpdateJWTPublicKeyPEM,
+    InstallTriggerPolicy,
+    GetTriggerPoliciesList,
+    GetTriggerPoliciesListReply,
+    DeleteTriggerPolicy,
+    GetTriggerPolicySource,
+    GetTriggerPolicySourceReply,
+    DeleteDevice,
+    GetDeviceRegistrationLimit,
+    GetDeviceRegistrationLimitReply,
+    GetDetailedInterfacesList,
+    GetDetailedInterfacesListReply
   }
 
   alias Astarte.Core.Interface
+  alias Astarte.Core.Triggers.Policy
   alias Astarte.RealmManagement.Mock.DB
 
   def rpc_call(payload, _destination) do
@@ -59,6 +73,16 @@ defmodule Astarte.RealmManagement.Mock do
 
     %GetInterfacesListReply{interfaces_names: list}
     |> encode_reply(:get_interfaces_list_reply)
+    |> ok_wrap
+  end
+
+  defp execute_rpc(
+         {:get_detailed_interfaces_list, %GetDetailedInterfacesList{realm_name: realm_name}}
+       ) do
+    list = DB.get_detailed_interfaces_list(realm_name)
+
+    %GetDetailedInterfacesListReply{interface_json: list}
+    |> encode_reply(:get_detailed_interfaces_list_reply)
     |> ok_wrap
   end
 
@@ -152,6 +176,116 @@ defmodule Astarte.RealmManagement.Mock do
     :ok = DB.put_jwt_public_key_pem(realm_name, pem)
 
     generic_ok()
+    |> ok_wrap
+  end
+
+  defp execute_rpc(
+         {:install_trigger_policy,
+          %InstallTriggerPolicy{realm_name: realm_name, trigger_policy_json: trigger_policy_json}}
+       ) do
+    {:ok, params} = Jason.decode(trigger_policy_json)
+
+    {:ok, policy} = Policy.changeset(%Policy{}, params) |> Ecto.Changeset.apply_action(:insert)
+
+    with :ok <- DB.install_trigger_policy(realm_name, policy) do
+      generic_ok(true)
+      |> ok_wrap
+    else
+      {:error, reason} ->
+        generic_error(reason)
+        |> ok_wrap
+    end
+  end
+
+  defp execute_rpc(
+         {:get_trigger_policies_list,
+          %GetTriggerPoliciesList{
+            realm_name: realm_name
+          }}
+       ) do
+    list = DB.get_trigger_policies_list(realm_name)
+
+    %GetTriggerPoliciesListReply{trigger_policies_names: list}
+    |> encode_reply(:get_trigger_policies_list_reply)
+    |> ok_wrap
+  end
+
+  defp execute_rpc(
+         {:delete_trigger_policy,
+          %DeleteTriggerPolicy{
+            realm_name: realm_name,
+            trigger_policy_name: name
+          }}
+       ) do
+    case DB.delete_trigger_policy(realm_name, name) do
+      :ok ->
+        generic_ok()
+        |> ok_wrap()
+
+      {:error, reason} ->
+        generic_error(reason)
+        |> ok_wrap()
+    end
+  end
+
+  defp execute_rpc(
+         {:get_trigger_policy_source,
+          %GetTriggerPolicySource{
+            realm_name: realm_name,
+            trigger_policy_name: name
+          }}
+       ) do
+    if source = DB.get_trigger_policy_source(realm_name, name) do
+      %GetTriggerPolicySourceReply{source: source}
+      |> encode_reply(:get_trigger_policy_source_reply)
+      |> ok_wrap
+    else
+      generic_error(:trigger_policy_not_found)
+      |> ok_wrap
+    end
+  end
+
+  defp execute_rpc(
+         {:delete_device,
+          %DeleteDevice{
+            realm_name: realm_name,
+            device_id: device_id
+          }}
+       ) do
+    with :ok <- DB.delete_device(realm_name, device_id) do
+      %GenericOkReply{}
+      |> encode_reply(:generic_ok_reply)
+      |> ok_wrap
+    else
+      {:error, reason} ->
+        generic_error(reason)
+        |> ok_wrap
+    end
+  end
+
+  defp execute_rpc(
+         {:get_device_registration_limit,
+          %GetDeviceRegistrationLimit{
+            realm_name: realm_name
+          }}
+       ) do
+    value = DB.get_device_registration_limit(realm_name)
+
+    %GetDeviceRegistrationLimitReply{device_registration_limit: value}
+    |> encode_reply(:get_device_registration_limit_reply)
+    |> ok_wrap
+  end
+
+  defp execute_rpc(
+         {:get_datastream_maximum_storage_retention,
+          %GetDatastreamMaximumStorageRetention{
+            realm_name: realm_name
+          }}
+       ) do
+    value = DB.get_datastream_maximum_storage_retention(realm_name)
+
+    %GetDatastreamMaximumStorageRetentionReply{datastream_maximum_storage_retention: value}
+    |> encode_reply(:get_datastream_maximum_storage_retention_reply)
     |> ok_wrap
   end
 

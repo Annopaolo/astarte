@@ -1,4 +1,4 @@
-use Mix.Config
+import Config
 
 # We don't run a server during test. If one is required,
 # you can enable the server option below.
@@ -27,6 +27,9 @@ config :logger, :console,
 config :astarte_rpc, :amqp_connection, host: System.get_env("RABBITMQ_HOST") || "rabbitmq"
 
 config :astarte_appengine_api, :rpc_client, MockRPCClient
+
+config :stream_data,
+  max_runs: 50
 
 config :astarte_appengine_api,
        :test_priv_key,
