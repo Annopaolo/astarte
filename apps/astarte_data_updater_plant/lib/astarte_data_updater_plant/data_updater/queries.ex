@@ -508,6 +508,67 @@ defmodule Astarte.DataUpdaterPlant.DataUpdater.Queries do
     DatabaseQuery.call!(db_client, refresh_connected_query)
   end
 
+  def ecto_get_connected_remaining_ttl(realm, device_id) do
+    alias Astarte.DataUpdaterPlant.Device
+    alias Astarte.Core.CQLUtils
+    alias Astarte.DataUpdaterPlant.Config
+    import Ecto.Query
+
+    keyspace_name =
+      CQLUtils.realm_name_to_keyspace_name(realm, Config.astarte_instance_id!())
+
+    query =
+      Device
+      |> where(device_id: ^device_id)
+      |> select([device], fragment("TTL(?)", device.connected))
+      |> put_query_prefix(keyspace_name)
+
+    case run_one(query) do
+      n when is_number(n) -> {:ok, n}
+      nil -> {:error, :device_not_found}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp run_one(queryable) do
+    try do
+      Astarte.DataUpdaterPlant.Repo.one(queryable)
+    catch
+      %Xandra.Error{} = err ->
+        handle_xandra_error(err)
+
+      %Xandra.ConnectionError{} = err ->
+        _ =
+          Logger.warning("Database connection error #{Exception.message(err)}.",
+            tag: "database_connection_error"
+          )
+
+        {:error, :database_connection_error}
+    end
+  end
+
+  defp handle_xandra_error(error) do
+    %Xandra.Error{message: message} = error
+
+    case Regex.run(~r/Keyspace (.*) does not exist/, message) do
+      [_message, keyspace] ->
+        Logger.warning("Keyspace #{keyspace} does not exist.",
+          tag: "realm_not_found"
+        )
+
+        {:error, :not_existing_realm}
+
+      nil ->
+        _ =
+          Logger.warning(
+            "Database error, cannot get realm public key: #{Exception.message(error)}.",
+            tag: "database_error"
+          )
+
+        {:error, :database_error}
+    end
+  end
+
   defp get_connected_remaining_ttl(db_client, device_id) do
     fetch_connected_ttl_statement = """
     SELECT TTL(connected)
