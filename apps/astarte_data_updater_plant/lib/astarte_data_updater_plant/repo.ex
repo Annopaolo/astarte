@@ -30,9 +30,28 @@ defmodule Astarte.DataUpdaterPlant.Repo do
     {:ok, config}
   end
 
+  def fetch_all(queryable, opts \\ []) do
+    try do
+      all(queryable, opts)
+    catch
+      error ->
+        handle_xandra_error(error)
+    end
+  end
+
   def fetch_one(queryable, opts \\ []) do
     try do
       one(queryable, opts)
+    catch
+      error ->
+        handle_xandra_error(error)
+    end
+  end
+
+  def safe_update(queryable, updates, opts \\ []) do
+    # TODO do we really want to :ok/{:error, reason} here?
+    try do
+      update_all(queryable, updates, opts)
     catch
       error ->
         handle_xandra_error(error)
