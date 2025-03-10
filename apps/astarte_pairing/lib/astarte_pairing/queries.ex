@@ -39,7 +39,7 @@ defmodule Astarte.Pairing.Queries do
       with {:ok, pem} <-
              KvStore.fetch_value("auth", "jwt_public_key_pem", :string,
                prefix: keyspace,
-               consistency: :quorum,
+               consistency: :local_quorum,
                error: :public_key_not_found
              ) do
         {:ok, [pem]}
@@ -158,7 +158,7 @@ defmodule Astarte.Pairing.Queries do
     try do
       Repo.fetch(Device, device_id,
         prefix: keyspace_name,
-        consistency: :quorum,
+        consistency: :local_quorum,
         error: :device_not_found
       )
     rescue
@@ -195,7 +195,7 @@ defmodule Astarte.Pairing.Queries do
       last_credentials_request_ip: device_ip,
       first_credentials_request: first_credentials_request_timestamp
     })
-    |> Repo.update(prefix: keyspace_name, consistency: :quorum)
+    |> Repo.update(prefix: keyspace_name, consistency: :each_quorum)
   end
 
   def fetch_device_registration_limit(realm_name) do
@@ -266,7 +266,7 @@ defmodule Astarte.Pairing.Queries do
       introspection: introspection,
       introspection_minor: introspection_minor
     })
-    |> Repo.insert(prefix: keyspace_name, consistency: :quorum)
+    |> Repo.insert(prefix: keyspace_name, consistency: :each_quorum)
   end
 
   defp do_register_unconfirmed_device(
@@ -291,7 +291,7 @@ defmodule Astarte.Pairing.Queries do
       introspection: introspection,
       introspection_minor: introspection_minor
     })
-    |> Repo.update(prefix: keyspace_name, consistency: :quorum)
+    |> Repo.update(prefix: keyspace_name, consistency: :each_quorum)
   end
 
   defp build_initial_introspection_maps(initial_introspection) do
