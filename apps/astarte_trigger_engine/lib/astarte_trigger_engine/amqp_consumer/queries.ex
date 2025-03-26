@@ -31,11 +31,12 @@ defmodule Astarte.TriggerEngine.AMQPConsumer.Queries do
     query =
       from k in KvStore,
         prefix: ^keyspace_name,
-        where: k.group == "trigger_policy"
+        where: k.group == "trigger_policy",
+        select: k.value
 
     case Repo.safe_fetch_all(query, consistency: Consistency.domain_model(:read)) do
       {:ok, policies} ->
-        {:ok, Enum.map(policies, &extract_name_and_data/1)}
+        {:ok, policies}
 
       {:error, reason} ->
         _ = Logger.warning("Could not list policies, reason: #{inspect(reason)}")

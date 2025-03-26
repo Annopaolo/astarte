@@ -22,16 +22,10 @@ defmodule Astarte.TriggerEngine.AMQPConsumer.AMQPConsumerTracker do
   use GenServer
   alias Astarte.TriggerEngine.AMQPConsumer.Queries
   alias Astarte.TriggerEngine.AMQPConsumer.AMQPConsumerSupervisor
-  alias Astarte.TriggerEngine.AMQPConsumer.AMQPMessageConsumer
-  alias Astarte.Core.Triggers.Policy
-  alias Astarte.Core.Triggers.Policy.Handler
-  alias Astarte.Core.Triggers.Policy.ErrorKeyword
-  alias Astarte.Core.Triggers.PolicyProtobuf.Policy, as: PolicyProto
+  alias Astarte.TriggerEngine.AMQPConsumer.AMQPMessageConsumer.Policy
 
   # 30 seconds
   @update_timeout 30 * 1000
-
-  @default_policy_name "@default"
 
   def start_link(default) when is_list(default) do
     GenServer.start_link(__MODULE__, default, name: __MODULE__)
@@ -45,6 +39,7 @@ defmodule Astarte.TriggerEngine.AMQPConsumer.AMQPConsumerTracker do
     {:ok, args}
   end
 
+  # TODO integration
   @impl true
   def handle_info(:update_consumers, state) do
     registered_consumers =
@@ -54,10 +49,8 @@ defmodule Astarte.TriggerEngine.AMQPConsumer.AMQPConsumerTracker do
 
     all_policies = fetch_all_policies_with_realms()
 
-    new_consumers = Map.drop(all_policies, registered_consumers)
-
-    outdated_consumers =
-      Enum.reject(registered_consumers, &Enum.member?(Map.keys(all_policies), &1))
+    %{create: new_consumers, remove: outdated_consumers} =
+      Policy.update_consumers(all_policies, registered_consumers)
 
     _ = Logger.debug("new_consumers: #{inspect(new_consumers)}")
 
@@ -76,22 +69,11 @@ defmodule Astarte.TriggerEngine.AMQPConsumer.AMQPConsumerTracker do
     Process.send_after(__MODULE__, :update_consumers, @update_timeout)
   end
 
-  defp start_new_consumer({{realm_name, policy_name}, policy_data}) do
+  defp start_new_consumer(%{realm: realm, policy: policy}) do
     _ =
-      Logger.debug("Found new policy queue for #{realm_name}, #{policy_name}, starting consumer")
+      Logger.debug("Found new policy queue for #{realm}, #{policy.name}, starting consumer")
 
-    policy =
-      policy_data
-      |> PolicyProto.decode()
-      |> Policy.from_policy_proto!()
-
-    child =
-      {AMQPMessageConsumer,
-       [
-         realm_name: realm_name,
-         policy: policy,
-         pool_id: :events_consumer_pool
-       ]}
+    child = Policy.to_consumer(realm, policy)
 
     {:ok, _pid} = AMQPConsumerSupervisor.start_child(child)
   end
@@ -106,41 +88,17 @@ defmodule Astarte.TriggerEngine.AMQPConsumer.AMQPConsumerTracker do
     end
   end
 
-  def fetch_all_policies_with_realms() do
+  defp fetch_all_policies_with_realms() do
     with {:ok, realm_names} <- Queries.list_realms() do
-      Enum.reduce(realm_names, %{}, fn realm_name, acc ->
-        Map.merge(acc, fetch_realm_policies_map(realm_name))
+      Enum.flat_map(realm_names, fn realm ->
+        realm |> fetch_policies_for_realm() |> Policy.to_policy_list()
       end)
     end
   end
 
-  defp fetch_realm_policies_map(realm_name) do
-    policies_list = do_fetch_realm_policies_list(realm_name)
-
-    Enum.map(policies_list, fn {policy_name, policy_data} ->
-      {{realm_name, policy_name}, policy_data}
-    end)
-    |> Enum.into(%{})
-    |> Map.put({realm_name, @default_policy_name}, default_policy())
-  end
-
-  defp do_fetch_realm_policies_list(realm_name) do
+  defp fetch_policies_for_realm(realm_name) do
     with {:ok, policies_list} <- Queries.list_policies(realm_name) do
       policies_list
     end
-  end
-
-  # we need this because the default policy cannot be installed
-  defp default_policy() do
-    %Policy{
-      name: @default_policy_name,
-      # Do not limit default queue size so that we don't break Astarte < 1.1 behaviour
-      maximum_capacity: nil,
-      error_handlers: [
-        %Handler{on: %ErrorKeyword{keyword: "any_error"}, strategy: "discard"}
-      ]
-    }
-    |> Policy.to_policy_proto()
-    |> PolicyProto.encode()
   end
 end
