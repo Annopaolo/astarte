@@ -26,6 +26,11 @@ defmodule Astarte.DataUpdaterPlant.MessageTracker.Server do
 
   # TODO: this should probably be a :gen_statem so we can simplify state data
 
+  def start_link(args) do
+    name = Keyword.fetch!(args, :name)
+    GenServer.start_link(__MODULE__, args, name: name)
+  end
+
   def init(args) do
     acknowledger = Keyword.fetch!(args, :acknowledger)
     {:ok, {:new, :queue.new(), %{}, acknowledger}}

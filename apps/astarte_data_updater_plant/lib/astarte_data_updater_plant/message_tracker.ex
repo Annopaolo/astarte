@@ -17,13 +17,6 @@
 #
 
 defmodule Astarte.DataUpdaterPlant.MessageTracker do
-  alias Astarte.DataUpdaterPlant.MessageTracker.Server
-
-  def start_link(args) do
-    name = Keyword.fetch!(args, :name)
-    GenServer.start_link(Server, args, name: name)
-  end
-
   def track_delivery(message_tracker, message_id, delivery_tag) do
     GenServer.cast(message_tracker, {:track_delivery, message_id, delivery_tag})
   end

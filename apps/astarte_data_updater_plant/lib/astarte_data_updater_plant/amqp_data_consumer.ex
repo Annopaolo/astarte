@@ -66,12 +66,6 @@ defmodule Astarte.DataUpdaterPlant.AMQPDataConsumer do
     GenServer.call(pid, {:requeue, delivery_tag})
   end
 
-  def start_message_tracker(realm, encoded_device_id) do
-    with {:ok, via_tuple} <- fetch_queue_via_tuple(realm, encoded_device_id) do
-      GenServer.call(via_tuple, {:start_message_tracker, realm, encoded_device_id})
-    end
-  end
-
   def start_data_updater(realm, encoded_device_id, message_tracker) do
     with {:ok, via_tuple} <- fetch_queue_via_tuple(realm, encoded_device_id) do
       GenServer.call(via_tuple, {:start_data_updater, realm, encoded_device_id, message_tracker})
@@ -123,11 +117,6 @@ defmodule Astarte.DataUpdaterPlant.AMQPDataConsumer do
 
   def handle_call({:requeue, delivery_tag}, _from, %State{channel: chan} = state) do
     res = @adapter.reject(chan, delivery_tag, requeue: true)
-    {:reply, res, state}
-  end
-
-  def handle_call({:start_message_tracker, realm, device_id}, _from, state) do
-    res = DataUpdater.get_message_tracker(realm, device_id)
     {:reply, res, state}
   end
 

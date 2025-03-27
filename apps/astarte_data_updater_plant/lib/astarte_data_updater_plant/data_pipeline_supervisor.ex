@@ -33,8 +33,15 @@ defmodule Astarte.DataUpdaterPlant.DataPipelineSupervisor do
   @impl true
   def init(_init_arg) do
     children = [
-      {Registry, [keys: :unique, name: Registry.MessageTracker]},
+      {Horde.Registry, [keys: :unique, name: Registry.MessageTracker, members: :auto]},
       {Registry, [keys: :unique, name: Registry.DataUpdater]},
+      {Horde.DynamicSupervisor,
+       [
+         name: Supervisor.MessageTracker,
+         strategy: :one_for_one,
+         members: :auto,
+         distribution_strategy: Horde.UniformDistribution
+       ]},
       {ExRabbitPool.PoolSupervisor,
        rabbitmq_config: Config.amqp_producer_options!(),
        connection_pools: [Config.events_producer_pool_config!()]},
