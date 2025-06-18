@@ -1,7 +1,5 @@
 # Astarte in 5 minutes
 
-**This documentation page describes a development version, for production systems please use the [stable version](https://docs.astarte-platform.org/latest) instead.**
-
 This tutorial will guide you through bringing up your Astarte instance, creating a realm and streaming your first data from a device simulator (or a real device) before your cup of tea is ready.
 
 ## Before you begin
@@ -62,8 +60,8 @@ Ubuntu 22.04 and macOS 10.15 Catalina, but any other modern operating system sho
 To get our Astarte instance running as fast as possible, we will install Astarte's standalone distribution. It includes a tunable Docker Compose which brings up Astarte and every companion service needed for it to work. To do so, simply clone Astarte's main repository and use its scripts to bring it up:
 
 ```sh
-$ git clone https://github.com/astarte-platform/astarte.git && cd astarte
-$ docker run -v $(pwd)/compose:/compose astarte/docker-compose-initializer:snapshot
+$ git clone https://github.com/astarte-platform/astarte.git -b v1.2.0 && cd astarte
+$ docker run -v $(pwd)/compose:/compose astarte/docker-compose-initializer:1.2.0
 $ docker compose pull
 $ docker compose up -d
 ```

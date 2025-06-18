@@ -1,7 +1,7 @@
 #
 # This file is part of Astarte.
 #
-# Copyright 2017-2021 Ispirata Srl
+# Copyright 2017-2025 SECO Mind Srl
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,7 +22,7 @@ defmodule Astarte.AppEngine.API.Mixfile do
     [
       app: :astarte_appengine_api,
       elixir: "~> 1.15",
-      version: "1.2.0",
+      version: "1.2.1-alpha.0",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       test_coverage: [tool: ExCoveralls],
@@ -69,8 +69,9 @@ defmodule Astarte.AppEngine.API.Mixfile do
 
   defp astarte_required_modules(_) do
     [
-      {:astarte_core, "~> 1.2"},
-      {:astarte_data_access, "~> 1.2"},
+      {:astarte_core, github: "astarte-platform/astarte_core", branch: "release-1.2"},
+      {:astarte_data_access,
+       github: "astarte-platform/astarte_data_access", branch: "release-1.2"},
       {:astarte_rpc, "~> 1.2"}
     ]
   end
@@ -90,10 +91,13 @@ defmodule Astarte.AppEngine.API.Mixfile do
       {:ex_lttb, "~> 0.3"},
       {:cyanide, "~> 2.0"},
       {:guardian, "~> 2.3.2"},
+      {:uuid, "~> 2.0", hex: :uuid_erl},
       # Required by :phoenix_swagger, otherwise it fails finding ex_json_schema.app
       {:ex_json_schema, "~> 0.7"},
       {:phoenix_swagger, "~> 0.8"},
       {:xandra, "~> 0.13"},
+      {:exandra, "~> 0.13"},
+      {:typed_ecto_schema, "~> 0.4"},
       {:pretty_log, "~> 0.1"},
       {:plug_logger_with_meta, "~> 0.1"},
       {:telemetry, "~> 0.4"},
@@ -110,7 +114,7 @@ defmodule Astarte.AppEngine.API.Mixfile do
       # Test section
       {:excoveralls, "~> 0.15", only: :test},
       {:mox, "~> 0.5", only: :test},
-      {:stream_data, "~> 0.5", only: :test}
+      {:stream_data, "~> 0.5", only: [:test, :dev]}
     ]
   end
 end

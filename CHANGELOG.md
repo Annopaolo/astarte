@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## [1.2.1-alpha.0] - 2025-04-10
+### Changed
+- Update the docker-compose configuration to allow both physical and virtual devices
+  to connect to Astarte, provided that the devices and the host are on the same LAN.
+
+## Fixed
+- [astarte_appengine_api] Correctly handle Cassandra `varchar`s.
+- [astarte_data_updater_plant] Correctly handle Cassandra `varchar`s.
+- [astarte_housekeeping] Correctly handle Cassandra `varchar`s.
+- [astarte_pairing] Correctly handle Cassandra `varchar`s.
+- [astarte_realm_management] Correctly handle Cassandra `varchar`s.
+- [astarte_trigger_engine] Correctly handle Cassandra `varchar`s.
+- [astarte_pairing] Fix a corner case in the realm public key retrieval
+  when connection to the database might fail.
+- [astarte_realm_management] Fix a corner case in the realm public key retrieval
+  when connection to the database might fail.
+- [astarte_appengine_api] Fix a corner case in the realm public key retrieval
+  when connection to the database might fail.
+- [astarte_data_updater_plant] Do not generate redundant disconnection
+  triggers in corner cases when a device is already disconnected.
+  Fix [#1014](https://github.com/astarte-platform/astarte/issues/1014).
+
 ## [1.2.0] - 2024-07-02
 ### Fixed
 - Forward port changes from release-1.1 (connection failure when delivering
@@ -72,6 +94,9 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 - [astarte_trigger_engine] Always treat event TTL for trigger policies in seconds,
   not milliseconds.
 - [astarte_trigger_engine] ack messages even with unreachable target (see https://github.com/astarte-platform/astarte/issues/936)
+- [astarte_appengine_api] Handle type casting for `longinteger` inputs
+- [astarte_appengine_api] refactor `device.ex` file - extract `cast_value` functions
+  into `InterfaceValue` module and add tests
 
 ## [1.1.1] - 2023-11-15
 ### Fixed

@@ -1,7 +1,7 @@
 #
 # This file is part of Astarte.
 #
-# Copyright 2017 - 2023 SECO Mind Srl
+# Copyright 2017 - 2025 SECO Mind Srl
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -23,7 +23,7 @@ defmodule Astarte.DataUpdaterPlant.Mixfile do
     [
       app: :astarte_data_updater_plant,
       elixir: "~> 1.15",
-      version: "1.2.0",
+      version: "1.2.1-alpha.0",
       build_embedded: Mix.env() == :prod,
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
@@ -68,8 +68,9 @@ defmodule Astarte.DataUpdaterPlant.Mixfile do
 
   defp astarte_required_modules(_) do
     [
-      {:astarte_core, "~> 1.2"},
-      {:astarte_data_access, "~> 1.2"},
+      {:astarte_core, github: "astarte-platform/astarte_core", branch: "release-1.2"},
+      {:astarte_data_access,
+       github: "astarte-platform/astarte_data_access", branch: "release-1.2"},
       {:astarte_rpc, "~> 1.2"}
     ]
   end
@@ -81,6 +82,7 @@ defmodule Astarte.DataUpdaterPlant.Mixfile do
       {:cyanide, "~> 2.0"},
       {:excoveralls, "~> 0.15", only: :test},
       {:mox, "~> 1.0", only: :test},
+      {:exandra, "~> 0.13"},
       # hex.pm package and esl/ex_rabbit_pool do not support amqp version 2.1.
       # This fork is supporting amqp ~> 2.0 and also ~> 3.0.
       {:ex_rabbit_pool, github: "leductam/ex_rabbit_pool"},
@@ -89,6 +91,7 @@ defmodule Astarte.DataUpdaterPlant.Mixfile do
       {:telemetry_metrics_prometheus_core, "~> 0.4"},
       {:telemetry_metrics, "~> 0.4"},
       {:telemetry_poller, "~> 0.4"},
+      {:typed_ecto_schema, "~> 0.4"},
       {:xandra, "~> 0.13"},
       {:skogsra, "~> 2.2"},
       {:telemetry, "~> 0.4"},
@@ -96,7 +99,8 @@ defmodule Astarte.DataUpdaterPlant.Mixfile do
       {:dialyxir, "~> 1.0", only: [:dev, :ci], runtime: false},
       # Workaround for Elixir 1.15 / ssl_verify_fun issue
       # See also: https://github.com/deadtrickster/ssl_verify_fun.erl/pull/27
-      {:ssl_verify_fun, "~> 1.1.0", manager: :rebar3, override: true}
+      {:ssl_verify_fun, "~> 1.1.0", manager: :rebar3, override: true},
+      {:uuid, "~> 2.0", hex: :uuid_erl}
     ]
   end
 end

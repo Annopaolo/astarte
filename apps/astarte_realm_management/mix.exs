@@ -23,7 +23,7 @@ defmodule Astarte.RealmManagement.Mixfile do
     [
       app: :astarte_realm_management,
       elixir: "~> 1.15",
-      version: "1.2.0",
+      version: "1.2.1-alpha.0",
       elixirc_paths: elixirc_paths(Mix.env()),
       build_embedded: Mix.env() == :prod,
       start_permanent: Mix.env() == :prod,
@@ -67,8 +67,9 @@ defmodule Astarte.RealmManagement.Mixfile do
 
   defp astarte_required_modules(_) do
     [
-      {:astarte_core, "~> 1.2"},
-      {:astarte_data_access, "~> 1.2"},
+      {:astarte_core, github: "astarte-platform/astarte_core", branch: "release-1.2"},
+      {:astarte_data_access,
+       github: "astarte-platform/astarte_data_access", branch: "release-1.2"},
       {:astarte_rpc, "~> 1.2"}
     ]
   end
@@ -84,11 +85,14 @@ defmodule Astarte.RealmManagement.Mixfile do
       {:telemetry_metrics, "~> 0.4"},
       {:telemetry_poller, "~> 0.4"},
       {:xandra, "~> 0.13"},
+      {:exandra, "~> 0.13"},
+      {:typed_ecto_schema, "~> 0.4"},
       {:observer_cli, "~> 1.5"},
       {:dialyxir, "~> 1.0", only: [:dev, :ci], runtime: false},
       # Workaround for Elixir 1.15 / ssl_verify_fun issue
       # See also: https://github.com/deadtrickster/ssl_verify_fun.erl/pull/27
-      {:ssl_verify_fun, "~> 1.1.0", manager: :rebar3, override: true}
+      {:ssl_verify_fun, "~> 1.1.0", manager: :rebar3, override: true},
+      {:uuid, "~> 2.0", hex: :uuid_erl}
     ]
   end
 end

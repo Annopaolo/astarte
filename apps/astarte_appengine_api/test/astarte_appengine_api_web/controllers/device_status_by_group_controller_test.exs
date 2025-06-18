@@ -1,7 +1,7 @@
 #
 # This file is part of Astarte.
 #
-# Copyright 2019-2023 SECO Mind Srl
+# Copyright 2019-2025 SECO Mind Srl
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -99,7 +99,7 @@ defmodule Astarte.AppEngine.APIWeb.DeviceStatusByGroupControllerTest do
   }
 
   setup_all do
-    {:ok, _client} = DatabaseTestHelper.create_test_keyspace()
+    DatabaseTestHelper.create_test_keyspace()
 
     on_exit(fn ->
       DatabaseTestHelper.destroy_local_test_keyspace()
@@ -158,10 +158,6 @@ defmodule Astarte.AppEngine.APIWeb.DeviceStatusByGroupControllerTest do
           "aliases" => _,
           "introspection" => _,
           "last_connection" => _,
-          "last_disconnection" => _,
-          "first_registration" => _,
-          "first_credentials_request" => _,
-          "last_credentials_request_ip" => _,
           "attributes" => _,
           "last_seen_ip" => _,
           "credentials_inhibited" => _,

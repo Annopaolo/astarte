@@ -1,7 +1,7 @@
 #
 # This file is part of Astarte.
 #
-# Copyright 2017-2023 SECO Mind Srl
+# Copyright 2017 - 2025 SECO Mind Srl
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ defmodule Astarte.Housekeeping.Queries do
   require Logger
   alias Astarte.Core.Realm
   alias Astarte.Core.CQLUtils
+  alias Astarte.DataAccess.Consistency
   alias Astarte.Housekeeping.Config
   alias Astarte.Housekeeping.Migrator
 
@@ -263,8 +264,10 @@ defmodule Astarte.Housekeeping.Queries do
     SELECT * FROM #{realm_name}.devices WHERE connected = true LIMIT 1 ALLOW FILTERING;
     """
 
+    consistency = Consistency.device_info(:read)
+
     with {:ok, %Xandra.Page{} = page} <-
-           Xandra.execute(conn, query, %{}, consistency: :one) do
+           Xandra.execute(conn, query, %{}, consistency: consistency) do
       if Enum.empty?(page) do
         :ok
       else
@@ -663,9 +666,11 @@ defmodule Astarte.Housekeeping.Queries do
 
     params = %{"public_key_pem" => public_key_pem}
 
+    consistency = Consistency.domain_model(:write)
+
     with {:ok, prepared} <- Xandra.prepare(conn, query),
          {:ok, %Xandra.Void{}} <-
-           Xandra.execute(conn, prepared, params, consistency: :each_quorum) do
+           Xandra.execute(conn, prepared, params, consistency: consistency) do
       :ok
     else
       {:error, %Xandra.Error{} = err} ->
@@ -689,8 +694,10 @@ defmodule Astarte.Housekeeping.Queries do
     VALUES ('astarte', 'schema_version', bigintAsBlob(#{Migrator.latest_realm_schema_version()}));
     """
 
+    consistency = Consistency.domain_model(:write)
+
     with {:ok, %Xandra.Void{}} <-
-           Xandra.execute(conn, query, %{}, consistency: :each_quorum) do
+           Xandra.execute(conn, query, %{}, consistency: consistency) do
       :ok
     else
       {:error, %Xandra.Error{} = err} ->
@@ -716,9 +723,11 @@ defmodule Astarte.Housekeeping.Queries do
 
     params = %{"realm_name" => realm_name}
 
+    consistency = Consistency.domain_model(:write)
+
     with {:ok, prepared} <- Xandra.prepare(conn, query),
          {:ok, %Xandra.Void{}} <-
-           Xandra.execute(conn, prepared, params, consistency: :each_quorum) do
+           Xandra.execute(conn, prepared, params, consistency: consistency) do
       :ok
     else
       {:error, %Xandra.Error{} = err} ->
@@ -748,9 +757,11 @@ defmodule Astarte.Housekeeping.Queries do
       "device_registration_limit" => device_registration_limit
     }
 
+    consistency = Consistency.domain_model(:write)
+
     with {:ok, prepared} <- Xandra.prepare(conn, query),
          {:ok, %Xandra.Void{}} <-
-           Xandra.execute(conn, prepared, params, consistency: :each_quorum) do
+           Xandra.execute(conn, prepared, params, consistency: consistency) do
       :ok
     else
       {:error, %Xandra.Error{} = err} ->
@@ -786,9 +797,11 @@ defmodule Astarte.Housekeeping.Queries do
     # This is safe since we checked the realm name in the caller
     query = String.replace(statement, ":keyspace_name", keyspace_name)
 
+    consistency = Consistency.domain_model(:write)
+
     with {:ok, prepared} <- Xandra.prepare(conn, query),
          {:ok, %Xandra.Void{}} <-
-           Xandra.execute(conn, prepared, params, consistency: :each_quorum) do
+           Xandra.execute(conn, prepared, params, consistency: consistency) do
       :ok
     else
       {:error, %Xandra.Error{} = err} ->
@@ -848,6 +861,8 @@ defmodule Astarte.Housekeeping.Queries do
     # right now the replication factor is an integer so SimpleStrategy is always used
     astarte_keyspace_replication = Config.astarte_keyspace_replication_factor!()
 
+    consistency = Consistency.domain_model(:write)
+
     with {:ok, replication_map_str} <- build_replication_map_str(astarte_keyspace_replication),
          query = """
          CREATE KEYSPACE #{CQLUtils.realm_name_to_keyspace_name("astarte", Config.astarte_instance_id!())}
@@ -856,7 +871,7 @@ defmodule Astarte.Housekeeping.Queries do
          """,
          :ok <- check_replication(conn, astarte_keyspace_replication),
          {:ok, %Xandra.SchemaChange{}} <-
-           Xandra.execute(conn, query, %{}, consistency: :each_quorum) do
+           Xandra.execute(conn, query, %{}, consistency: consistency) do
       :ok
     else
       {:error, %Xandra.Error{} = err} ->
@@ -890,8 +905,10 @@ defmodule Astarte.Housekeeping.Queries do
     );
     """
 
+    consistency = Consistency.domain_model(:write)
+
     with {:ok, %Xandra.SchemaChange{}} <-
-           Xandra.execute(conn, query, %{}, consistency: :each_quorum) do
+           Xandra.execute(conn, query, %{}, consistency: consistency) do
       :ok
     else
       {:error, %Xandra.Error{} = err} ->
@@ -919,8 +936,10 @@ defmodule Astarte.Housekeeping.Queries do
     );
     """
 
+    consistency = Consistency.domain_model(:write)
+
     with {:ok, %Xandra.SchemaChange{}} <-
-           Xandra.execute(conn, query, %{}, consistency: :each_quorum) do
+           Xandra.execute(conn, query, %{}, consistency: consistency) do
       :ok
     else
       {:error, %Xandra.Error{} = err} ->
@@ -944,7 +963,9 @@ defmodule Astarte.Housekeeping.Queries do
     VALUES ('astarte', 'schema_version', bigintAsBlob(#{Migrator.latest_astarte_schema_version()}));
     """
 
-    with {:ok, %Xandra.Void{}} <- Xandra.execute(conn, query, %{}, consistency: :each_quorum) do
+    consistency = Consistency.domain_model(:write)
+
+    with {:ok, %Xandra.Void{}} <- Xandra.execute(conn, query, %{}, consistency: consistency) do
       :ok
     else
       {:error, %Xandra.Error{} = err} ->
@@ -972,7 +993,9 @@ defmodule Astarte.Housekeeping.Queries do
     WHERE keyspace_name='#{CQLUtils.realm_name_to_keyspace_name("astarte", Config.astarte_instance_id!())}'
     """
 
-    case Xandra.Cluster.execute(:xandra, query) do
+    consistency = Consistency.domain_model(:read)
+
+    case Xandra.Cluster.execute(:xandra, query, %{}, consistency: consistency) do
       {:ok, %Xandra.Page{} = page} ->
         if Enum.count(page) > 0 do
           {:ok, true}
@@ -994,51 +1017,15 @@ defmodule Astarte.Housekeeping.Queries do
     end
   end
 
-  def check_astarte_health(consistency) do
-    query = """
-    SELECT COUNT(*)
-    FROM #{CQLUtils.realm_name_to_keyspace_name("astarte", Config.astarte_instance_id!())}.realms
-    """
-
-    with {:ok, %Xandra.Page{} = page} <-
-           Xandra.Cluster.execute(:xandra, query, %{}, consistency: consistency),
-         {:ok, _} <- Enum.fetch(page, 0) do
-      :ok
-    else
-      :error ->
-        _ =
-          Logger.warning(
-            "Cannot retrieve count for #{CQLUtils.realm_name_to_keyspace_name("astarte", Config.astarte_instance_id!())}.realms table.",
-            tag: "health_check_error"
-          )
-
-        {:error, :health_check_bad}
-
-      {:error, %Xandra.Error{} = err} ->
-        _ =
-          Logger.warning("Database error, health is not good: #{inspect(err)}.",
-            tag: "health_check_database_error"
-          )
-
-        {:error, :health_check_bad}
-
-      {:error, %Xandra.ConnectionError{} = err} ->
-        _ =
-          Logger.warning("Database error, health is not good: #{inspect(err)}.",
-            tag: "health_check_database_connection_error"
-          )
-
-        {:error, :database_connection_error}
-    end
-  end
-
   def list_realms do
     query = """
     SELECT realm_name
     FROM #{CQLUtils.realm_name_to_keyspace_name("astarte", Config.astarte_instance_id!())}.realms;
     """
 
-    case Xandra.Cluster.execute(:xandra, query, %{}, consistency: :quorum) do
+    consistency = Consistency.domain_model(:read)
+
+    case Xandra.Cluster.execute(:xandra, query, %{}, consistency: consistency) do
       {:ok, %Xandra.Page{} = page} ->
         {:ok, Enum.map(page, fn %{"realm_name" => realm_name} -> realm_name end)}
 
@@ -1154,9 +1141,11 @@ defmodule Astarte.Housekeeping.Queries do
     WHERE realm_name=:realm_name;
     """
 
+    consistency = Consistency.domain_model(:read)
+
     with {:ok, prepared} <- Xandra.prepare(conn, query),
          {:ok, %Xandra.Page{} = page} <-
-           Xandra.execute(conn, prepared, %{"realm_name" => realm_name}, consistency: :quorum) do
+           Xandra.execute(conn, prepared, %{"realm_name" => realm_name}, consistency: consistency) do
       if Enum.count(page) > 0 do
         {:ok, true}
       else
@@ -1181,9 +1170,12 @@ defmodule Astarte.Housekeeping.Queries do
     WHERE group='auth' AND key='jwt_public_key_pem';
     """
 
+    consistency = Consistency.domain_model(:read)
+
     with :ok <- validate_realm_name(realm_name),
          query = String.replace(statement, ":realm_name", realm_name),
-         {:ok, %Xandra.Page{} = page} <- Xandra.execute(conn, query, %{}, consistency: :quorum) do
+         {:ok, %Xandra.Page{} = page} <-
+           Xandra.execute(conn, query, %{}, consistency: consistency) do
       case Enum.fetch(page, 0) do
         {:ok, %{"system.blobasvarchar(value)" => public_key}} ->
           {:ok, public_key}
@@ -1223,11 +1215,12 @@ defmodule Astarte.Housekeeping.Queries do
 
     # TODO move away from this when NoaccOS' PR is merged
     query = String.replace(statement, ":keyspace_name", keyspace_name)
+
     # TODO refactor when NoaccOS' PR is merged
     with {:ok, prepared} <- Xandra.prepare(conn, query),
          {:ok, result} <-
            Xandra.execute(conn, prepared, %{"new_public_key" => new_public_key},
-             consistency: :quorum
+             consistency: Consistency.domain_model(:write)
            ) do
       {:ok, result}
     else
@@ -1257,8 +1250,10 @@ defmodule Astarte.Housekeeping.Queries do
       "realm_name" => realm_name
     }
 
+    consistency = Consistency.domain_model(:write)
+
     with {:ok, prepared} <- Xandra.prepare(conn, statement) do
-      case Xandra.execute(conn, prepared, params, consistency: :quorum) do
+      case Xandra.execute(conn, prepared, params, consistency: consistency) do
         {:ok, result} ->
           {:ok, result}
 
@@ -1291,9 +1286,11 @@ defmodule Astarte.Housekeeping.Queries do
     # TODO move away from this when NoaccOS' PR is merged
     query = String.replace(statement, ":realm_name", realm_name)
 
+    consistency = Consistency.domain_model(:write)
+
     # TODO refactor when NoaccOS' PR is merged
     with {:ok, prepared} <- Xandra.prepare(conn, query),
-         {:ok, result} <- Xandra.execute(conn, prepared, params, consistency: :quorum) do
+         {:ok, result} <- Xandra.execute(conn, prepared, params, consistency: consistency) do
       {:ok, result}
     else
       {:error, %Xandra.Error{} = err} ->
@@ -1321,8 +1318,10 @@ defmodule Astarte.Housekeeping.Queries do
       "realm_name" => realm_name
     }
 
+    consistency = Consistency.domain_model(:write)
+
     with {:ok, prepared} <- Xandra.prepare(conn, statement) do
-      case Xandra.execute(conn, prepared, params, consistency: :quorum) do
+      case Xandra.execute(conn, prepared, params, consistency: consistency) do
         {:ok, result} ->
           {:ok, result}
 
@@ -1350,9 +1349,11 @@ defmodule Astarte.Housekeeping.Queries do
     # TODO move away from this when NoaccOS' PR is merged
     query = String.replace(statement, ":realm_name", realm_name)
 
+    consistency = Consistency.domain_model(:write)
+
     # TODO refactor when NoaccOS' PR is merged
     with {:ok, prepared} <- Xandra.prepare(conn, query),
-         {:ok, result} <- Xandra.execute(conn, prepared, %{}, consistency: :quorum) do
+         {:ok, result} <- Xandra.execute(conn, prepared, %{}, consistency: consistency) do
       {:ok, result}
     else
       {:error, %Xandra.Error{} = err} ->
@@ -1376,8 +1377,10 @@ defmodule Astarte.Housekeeping.Queries do
     WHERE keyspace_name=:realm_name
     """
 
+    opts = [consistency: Consistency.domain_model(:read)]
+
     with {:ok, prepared} <- Xandra.prepare(conn, query),
-         {:ok, page} <- Xandra.execute(conn, prepared, %{"realm_name" => realm_name}) do
+         {:ok, page} <- Xandra.execute(conn, prepared, %{"realm_name" => realm_name}, opts) do
       case Enum.fetch(page, 0) do
         {:ok, %{"replication" => replication_map}} ->
           {:ok, replication_map}
@@ -1448,8 +1451,10 @@ defmodule Astarte.Housekeeping.Queries do
     WHERE realm_name=:realm_name
     """
 
+    opts = [consistency: Consistency.domain_model(:read)]
+
     with {:ok, prepared} <- Xandra.prepare(conn, query),
-         {:ok, page} <- Xandra.execute(conn, prepared, %{"realm_name" => realm_name}) do
+         {:ok, page} <- Xandra.execute(conn, prepared, %{"realm_name" => realm_name}, opts) do
       case Enum.fetch(page, 0) do
         {:ok, %{"device_registration_limit" => value}} ->
           {:ok, value}
@@ -1486,11 +1491,13 @@ defmodule Astarte.Housekeeping.Queries do
     WHERE group='realm_config' AND key='datastream_maximum_storage_retention'
     """
 
+    opts = [consistency: Consistency.domain_model(:read)]
+
     # TODO change this once NoaccOS' PR is merged
     with :ok <- validate_realm_name(realm_name),
          query = String.replace(statement, ":realm_name", realm_name),
          {:ok, prepared} <- Xandra.prepare(conn, query),
-         {:ok, page} <- Xandra.execute(conn, prepared, %{}) do
+         {:ok, page} <- Xandra.execute(conn, prepared, %{}, opts) do
       case Enum.fetch(page, 0) do
         {:ok, %{"system.blobasint(value)" => value}} ->
           {:ok, value}
@@ -1519,7 +1526,9 @@ defmodule Astarte.Housekeeping.Queries do
     FROM system.local;
     """
 
-    with {:ok, %Xandra.Page{} = page} <- Xandra.execute(conn, query) do
+    opts = [consistency: Consistency.domain_model(:read)]
+
+    with {:ok, %Xandra.Page{} = page} <- Xandra.execute(conn, query, %{}, opts) do
       case Enum.fetch(page, 0) do
         {:ok, %{"data_center" => datacenter}} ->
           {:ok, datacenter}
@@ -1558,7 +1567,7 @@ defmodule Astarte.Housekeeping.Queries do
 
     with {:ok, prepared} <- Xandra.prepare(conn, query),
          {:ok, %Xandra.Page{} = page} <-
-           Xandra.execute(conn, prepared, %{"data_center" => datacenter}) do
+           Xandra.execute(conn, prepared, %{"data_center" => datacenter}, opts) do
       case Enum.fetch(page, 0) do
         :error ->
           _ =

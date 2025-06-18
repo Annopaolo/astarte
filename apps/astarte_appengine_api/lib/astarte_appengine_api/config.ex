@@ -1,7 +1,7 @@
 #
 # This file is part of Astarte.
 #
-# Copyright 2017 Ispirata Srl
+# Copyright 2017-2025 SECO Mind Srl
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -153,6 +153,8 @@ defmodule Astarte.AppEngine.API.Config do
           | {:depth, integer()}
   @type ssl_options :: :none | [ssl_option]
 
+  @type auth_options :: {module(), [{String.t(), String.t()}]}
+
   @type options ::
           {:username, String.t()}
           | {:password, String.t()}
@@ -209,9 +211,6 @@ defmodule Astarte.AppEngine.API.Config do
   @doc """
   Returns cassandra nodes formatted in the CQEx format
   """
-  defdelegate cqex_nodes, to: DataAccessConfig
-  defdelegate cqex_nodes!, to: DataAccessConfig
-
   defdelegate xandra_options!, to: DataAccessConfig
 
   defdelegate astarte_instance_id!, to: DataAccessConfig

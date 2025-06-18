@@ -1,7 +1,7 @@
 #
 # This file is part of Astarte.
 #
-# Copyright 2017-2023 SECO Mind Srl
+# Copyright 2017-2025 SECO Mind Srl
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -23,8 +23,8 @@ defmodule Astarte.AppEngine.API.DeviceTest do
   alias Astarte.AppEngine.API.Device.DevicesList
   alias Astarte.AppEngine.API.Device.InterfaceInfo
   alias Astarte.AppEngine.API.Device.InterfaceValues
-  alias Astarte.DataAccess.Database
-  alias CQEx.Query, as: DatabaseQuery
+  alias Astarte.AppEngine.API.Repo
+  alias Astarte.DataAccess.Realms.Realm
 
   alias Astarte.RPC.Protocol.VMQ.Plugin.{
     Call,
@@ -155,7 +155,7 @@ defmodule Astarte.AppEngine.API.DeviceTest do
   end
 
   setup_all do
-    {:ok, _client} = DatabaseTestHelper.create_test_keyspace()
+    DatabaseTestHelper.create_test_keyspace()
 
     on_exit(fn ->
       DatabaseTestHelper.destroy_local_test_keyspace()
@@ -178,13 +178,13 @@ defmodule Astarte.AppEngine.API.DeviceTest do
 
   test "list_interfaces/2 returns [] on a device without introspection" do
     encoded_device_id = "9ovH-plr6J_JPGWIp7c29w"
-    {:ok, client} = DatabaseTestHelper.connect_to_test_keyspace()
+
     {:ok, device_id} = Astarte.Core.Device.decode_device_id(encoded_device_id)
-    DatabaseTestHelper.insert_empty_device(client, device_id)
+    DatabaseTestHelper.insert_empty_device(device_id)
 
     assert Device.list_interfaces("autotestrealm", encoded_device_id) == {:ok, []}
 
-    DatabaseTestHelper.remove_device(client, device_id)
+    DatabaseTestHelper.remove_device(device_id)
   end
 
   test "get_interface_values! returns interfaces values on individual property interface" do
@@ -923,13 +923,13 @@ defmodule Astarte.AppEngine.API.DeviceTest do
       :ok,
       %Astarte.AppEngine.API.Device.InterfaceValues{
         data: [
-          [elem(DateTime.from_iso8601("2017-09-30 07:10:00.000Z"), 1), 1.1, "aaa"],
-          [elem(DateTime.from_iso8601("2017-09-30 07:12:00.000Z"), 1), 2.2, "bbb"],
-          [elem(DateTime.from_iso8601("2017-09-30 07:13:00.000Z"), 1), 3.3, "ccc"]
+          ["aaa", ~U[2017-09-30 07:10:00.000Z], 1.1],
+          ["bbb", ~U[2017-09-30 07:12:00.000Z], 2.2],
+          ["ccc", ~U[2017-09-30 07:13:00.000Z], 3.3]
         ],
         metadata: %{
-          "columns" => %{"string" => 2, "timestamp" => 0, "value" => 1},
-          "table_header" => ["timestamp", "value", "string"]
+          "columns" => %{"string" => 0, "timestamp" => 1, "value" => 2},
+          "table_header" => ["string", "timestamp", "value"]
         }
       }
     }
@@ -963,9 +963,8 @@ defmodule Astarte.AppEngine.API.DeviceTest do
     test = "autotestrealm"
     device_id = "f0VMRgIBAQAAAAAAAAAAAA"
 
-    {:ok, client} = Database.connect(realm: test)
-    DatabaseQuery.call!(client, "TRUNCATE com_example_testobject_v1")
-    DatabaseQuery.call!(client, "TRUNCATE individual_properties")
+    Repo.query!("TRUNCATE #{Realm.keyspace_name(test)}.com_example_testobject_v1")
+    Repo.query!("TRUNCATE #{Realm.keyspace_name(test)}.individual_properties")
 
     expected_reply = {:ok, %InterfaceValues{data: %{}}}
 
@@ -1125,14 +1124,14 @@ defmodule Astarte.AppEngine.API.DeviceTest do
                 data: %{
                   "1" => %{
                     "samplingPeriod" => %{
-                      "reception_timestamp" => reception_ts_1,
+                      "reception_timestamp" => _reception_ts_1,
                       "timestamp" => ts_1,
                       "value" => 10
                     }
                   },
                   "2" => %{
                     "samplingPeriod" => %{
-                      "reception_timestamp" => reception_ts_2,
+                      "reception_timestamp" => _reception_ts_2,
                       "timestamp" => ts_2,
                       "value" => 11
                     }
@@ -1237,14 +1236,14 @@ defmodule Astarte.AppEngine.API.DeviceTest do
                 data: %{
                   "1" => %{
                     "samplingPeriod" => %{
-                      "reception_timestamp" => reception_ts_1,
+                      "reception_timestamp" => _reception_ts_1,
                       "timestamp" => ts_1,
                       "value" => 10
                     }
                   },
                   "2" => %{
                     "samplingPeriod" => %{
-                      "reception_timestamp" => reception_ts_2,
+                      "reception_timestamp" => _reception_ts_2,
                       "timestamp" => ts_2,
                       "value" => 11
                     }
@@ -1464,12 +1463,12 @@ defmodule Astarte.AppEngine.API.DeviceTest do
                 data: %{
                   "my_new_path" => %{
                     "enable" => false,
-                    "samplingPeriod" => 100.0,
+                    "samplingPeriod" => 100,
                     "timestamp" => time1
                   },
                   "my_path" => %{
                     "enable" => true,
-                    "samplingPeriod" => 10.0,
+                    "samplingPeriod" => 10,
                     "timestamp" => time2
                   }
                 },
@@ -1618,12 +1617,12 @@ defmodule Astarte.AppEngine.API.DeviceTest do
                 data: %{
                   "my_new_path" => %{
                     "enable" => false,
-                    "samplingPeriod" => 100.0,
+                    "samplingPeriod" => 100,
                     "timestamp" => time1
                   },
                   "my_path" => %{
                     "enable" => true,
-                    "samplingPeriod" => 10.0,
+                    "samplingPeriod" => 10,
                     "timestamp" => time2
                   }
                 },
@@ -2150,7 +2149,7 @@ defmodule Astarte.AppEngine.API.DeviceTest do
   end
 
   defp tagged_publish_reply(local_matches, remote_matches \\ 0) do
-    reply = PublishReply.new(local_matches: local_matches, remote_matches: remote_matches)
+    reply = %PublishReply{local_matches: local_matches, remote_matches: remote_matches}
     {:publish_reply, reply}
   end
 end

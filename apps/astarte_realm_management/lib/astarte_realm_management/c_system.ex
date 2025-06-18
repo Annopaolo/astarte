@@ -1,7 +1,7 @@
 #
 # This file is part of Astarte.
 #
-# Copyright 2020 - 2023 SECO Mind Srl
+# Copyright 2020 - 2025 SECO Mind Srl
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,15 +17,23 @@
 #
 
 defmodule CSystem do
+  alias Astarte.DataAccess.Consistency
+  alias Astarte.RealmManagement.Repo
+  import Ecto.Query
+
   @agreement_sleep_millis 200
 
-  def run_with_schema_agreement(conn, opts \\ [], fun) when is_function(fun) do
+  @type function_result :: any()
+
+  @spec run_with_schema_agreement(Keyword.t(), (-> function_result())) ::
+          function_result() | {:error, :no_schema_change} | {:error, :timeout}
+  def run_with_schema_agreement(opts \\ [], fun) when is_function(fun) do
     timeout = Keyword.get(opts, :timeout, 30000)
     expect_change = Keyword.get(opts, :expect_change, false)
 
-    with {:ok, initial} <- wait_schema_agreement(conn, timeout),
+    with {:ok, initial} <- wait_schema_agreement(timeout),
          out = fun.(),
-         {:ok, final} <- wait_schema_agreement(conn, timeout) do
+         {:ok, final} <- wait_schema_agreement(timeout) do
       unless expect_change and initial == final do
         out
       else
@@ -34,58 +42,76 @@ defmodule CSystem do
     end
   end
 
-  def wait_schema_agreement(conn, timeout) when is_integer(timeout) and timeout >= 0 do
-    case schema_versions(conn) do
-      {:ok, [version]} ->
+  @spec wait_schema_agreement(integer()) ::
+          {:ok, Ecto.UUID.t()} | {:error, :timeout}
+  def wait_schema_agreement(timeout) when is_integer(timeout) and timeout >= 0 do
+    case schema_versions() do
+      [version] ->
         {:ok, version}
 
-      {:ok, _versions} ->
+      _versions ->
         millis = min(timeout, @agreement_sleep_millis)
 
-        if millis == 0 do
-          {:error, :timeout}
-        else
-          Process.sleep(millis)
-          wait_schema_agreement(conn, timeout - millis)
+        case millis do
+          0 ->
+            {:error, :timeout}
+
+          _ ->
+            Process.sleep(millis)
+            wait_schema_agreement(timeout - millis)
         end
-
-      any_other ->
-        any_other
     end
   end
 
-  def schema_versions(conn) do
-    with {:ok, local_version} <- query_local_schema_version(conn),
-         {:ok, peers_versions} <- query_peers_schema_versions(conn) do
-      {:ok, Enum.uniq([local_version | peers_versions])}
-    end
+  @spec schema_versions :: [Ecto.UUID.t()]
+  def schema_versions do
+    local_version = query_local_schema_version()
+    peers_version = query_peers_schema_versions()
+
+    [local_version | peers_version]
+    |> Enum.uniq()
   end
 
-  def query_peers_schema_versions(conn) do
-    query = "SELECT schema_version FROM system.peers"
-
-    with {:ok, res} <- Xandra.execute(conn, query, %{}, consistency: :one) do
-      schema_versions =
-        res
-        |> Stream.map(&Map.fetch!(&1, :schema_version))
-        |> Stream.uniq()
-        |> Enum.to_list()
-
-      {:ok, schema_versions}
-    end
+  @spec schema_versions :: [Ecto.UUID.t()]
+  def query_peers_schema_versions do
+    from(p in "peers", select: p.schema_version)
+    |> Repo.all(prefix: "system", consistency: Consistency.domain_model(:read))
+    |> Enum.uniq()
   end
 
-  def query_local_schema_version(conn) do
-    query = "SELECT schema_version FROM system.local WHERE key='local'"
+  @spec schema_versions :: Ecto.UUID.t()
+  def query_local_schema_version do
+    from(l in "local", select: l.schema_version)
+    |> Repo.get_by!([key: "local"],
+      prefix: "system",
+      consistency: Consistency.domain_model(:read)
+    )
+  end
 
-    with {:ok, res} <- Xandra.execute(conn, query, %{}, consistency: :one) do
-      schema_version =
-        res
-        |> Enum.take(1)
-        |> List.first()
-        |> Map.fetch!(:schema_version)
+  @spec execute_schema_change(String.t()) ::
+          {:ok, Ecto.Adapters.SQL.query_result()} | {:error, Exception.t()} | Xandra.Error.t()
+  def execute_schema_change(query) do
+    query_params = []
 
-      {:ok, schema_version}
+    consistency = Consistency.domain_model(:write)
+
+    result =
+      run_with_schema_agreement(fn ->
+        Repo.query(query, query_params, consistency: consistency, timeout: 60_000)
+      end)
+
+    case result do
+      {:error, :timeout} ->
+        %Xandra.Error{reason: :agreement_timeout, message: "Schema agreement wait timeout."}
+
+      {:error, :no_schema_change} ->
+        %Xandra.Error{
+          reason: :no_schema_change,
+          message: "Statement did not change the schema_version."
+        }
+
+      any ->
+        any
     end
   end
 end

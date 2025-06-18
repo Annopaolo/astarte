@@ -1,7 +1,7 @@
 #
 # This file is part of Astarte.
 #
-# Copyright 2017 - 2023 SECO Mind Srl
+# Copyright 2017 - 2025 SECO Mind Srl
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,12 +18,9 @@
 
 defmodule Astarte.RealmManagement.EngineTest do
   use ExUnit.Case
-  require Logger
   alias Astarte.Core.CQLUtils
   alias Astarte.RealmManagement.Config
-  alias Astarte.DataAccess.Database
   alias Astarte.RealmManagement.DatabaseTestHelper
-  alias Astarte.RealmManagement.DatabaseFixtures
   alias Astarte.RealmManagement.Engine
   alias Astarte.Core.Triggers.SimpleTriggerConfig
   alias Astarte.Core.Triggers.SimpleTriggersProtobuf.TaggedSimpleTrigger
@@ -642,20 +639,14 @@ defmodule Astarte.RealmManagement.EngineTest do
   @test_realm_name "autotestrealm"
 
   setup do
-    with {:ok, client} <- DatabaseTestHelper.connect_to_test_database() do
-      DatabaseTestHelper.seed_test_data(client)
-    end
+    DatabaseTestHelper.seed_test_data()
   end
 
   setup_all do
-    with {:ok, client} <- DatabaseTestHelper.connect_to_test_database() do
-      DatabaseTestHelper.create_test_keyspace(client)
-    end
+    DatabaseTestHelper.create_test_keyspace()
 
     on_exit(fn ->
-      with {:ok, client} <- DatabaseTestHelper.connect_to_test_database() do
-        DatabaseTestHelper.drop_test_keyspace(client)
-      end
+      DatabaseTestHelper.drop_test_keyspace()
     end)
   end
 
@@ -779,8 +770,6 @@ defmodule Astarte.RealmManagement.EngineTest do
     assert Engine.list_interface_versions("autotestrealm", "com.ispirata.Draft") ==
              {:ok, [[major_version: 0, minor_version: 2]]}
 
-    {:ok, client} = Database.connect(realm: "autotestrealm")
-
     d = :crypto.strong_rand_bytes(16)
 
     e1 =
@@ -791,10 +780,9 @@ defmodule Astarte.RealmManagement.EngineTest do
       )
 
     p1 = "/filterRules/0/TEST/value"
-    DatabaseTestHelper.seed_properties_test_value(client, d, "com.ispirata.Draft", 0, e1, p1)
+    DatabaseTestHelper.seed_properties_test_value(d, "com.ispirata.Draft", 0, e1, p1)
 
     assert DatabaseTestHelper.count_interface_properties_for_device(
-             client,
              d,
              "com.ispirata.Draft",
              0
@@ -803,7 +791,6 @@ defmodule Astarte.RealmManagement.EngineTest do
     assert Engine.delete_interface("autotestrealm", "com.ispirata.Draft", 0) == :ok
 
     assert DatabaseTestHelper.count_interface_properties_for_device(
-             client,
              d,
              "com.ispirata.Draft",
              0
@@ -904,14 +891,11 @@ defmodule Astarte.RealmManagement.EngineTest do
     assert Engine.list_interface_versions("autotestrealm", "com.ispirata.TestDatastream") ==
              {:ok, [[major_version: 0, minor_version: 10]]}
 
-    {:ok, client} = Database.connect(realm: "autotestrealm")
-
     d = :crypto.strong_rand_bytes(16)
     e1 = CQLUtils.endpoint_id("com.ispirata.TestDatastream", 0, "/%{sensorId}/realValues")
     p1 = "/0/realValues"
 
     DatabaseTestHelper.seed_datastream_test_data(
-      client,
       d,
       "com.ispirata.TestDatastream",
       0,
@@ -923,7 +907,6 @@ defmodule Astarte.RealmManagement.EngineTest do
     p2 = "/0/integerValues"
 
     DatabaseTestHelper.seed_datastream_test_data(
-      client,
       d,
       "com.ispirata.TestDatastream",
       0,
@@ -934,7 +917,6 @@ defmodule Astarte.RealmManagement.EngineTest do
     assert Engine.delete_interface("autotestrealm", "com.ispirata.TestDatastream", 0) == :ok
 
     assert DatabaseTestHelper.count_rows_for_datastream(
-             client,
              d,
              "com.ispirata.TestDatastream",
              0,
@@ -943,7 +925,6 @@ defmodule Astarte.RealmManagement.EngineTest do
            ) == 0
 
     assert DatabaseTestHelper.count_rows_for_datastream(
-             client,
              d,
              "com.ispirata.TestDatastream",
              0,
@@ -1194,7 +1175,7 @@ defmodule Astarte.RealmManagement.EngineTest do
   end
 
   test "get JWT public key PEM with unexisting realm" do
-    assert Engine.get_jwt_public_key_pem("notexisting") == {:error, :realm_not_found}
+    assert_raise Xandra.Error, fn -> Engine.get_jwt_public_key_pem("notexisting") end
   end
 
   test "update JWT public key PEM" do
@@ -1210,10 +1191,6 @@ defmodule Astarte.RealmManagement.EngineTest do
 
     assert Engine.get_jwt_public_key_pem("autotestrealm") ==
              {:ok, DatabaseTestHelper.jwt_public_key_pem_fixture()}
-  end
-
-  test "update JWT public key PEM with unexisting realm" do
-    assert Engine.get_jwt_public_key_pem("notexisting") == {:error, :realm_not_found}
   end
 
   test "install HTTP trigger" do
@@ -1573,8 +1550,9 @@ defmodule Astarte.RealmManagement.EngineTest do
   test "fail to retrieve datastream_maximum_storage_retention if realm does not exist" do
     realm_name = "realm#{System.unique_integer([:positive])}"
 
-    assert {:error, _} =
-             Engine.get_datastream_maximum_storage_retention(realm_name)
+    assert_raise Xandra.Error, fn ->
+      Engine.get_datastream_maximum_storage_retention(realm_name)
+    end
   end
 
   defp unpack_source({:ok, source}) when is_binary(source) do
