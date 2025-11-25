@@ -18,6 +18,7 @@ on:
 jobs:
   container_tests:
     name: Check container build and test for each Service
+    runs-on: ubuntu-22.04
     strategy:
       fail-fast: true
       matrix:
