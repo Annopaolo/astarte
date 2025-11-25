@@ -16,28 +16,6 @@ on:
     - 'release-*'
 
 jobs:
-  # container_tests:
-  #   name: Check container build and test for each Service
-  #   runs-on: ubuntu-22.04
-  #   strategy:
-  #     fail-fast: true
-  #     matrix:
-  #       app:
-  #       - astarte_appengine_api
-  #       - astarte_data_updater_plant
-  #       - astarte_housekeeping
-  #       - astarte_housekeeping_api
-  #       - astarte_pairing
-  #       - astarte_pairing_api
-  #       - astarte_realm_management
-  #       - astarte_realm_management_api
-  #       - astarte_trigger_engine
-  #   steps:
-  #   - name: Check container build and test for a single Service
-  #     id: build-test-single-container
-  #     uses: ./.github/workflows/astarte-apps-build-workflow.yaml
-  #     with:
-  #       app: ${{ matrix.app }}
   astarte_appengine_api:
     uses: ./.github/workflows/astarte-apps-build-workflow.yaml
     with:
@@ -49,36 +27,43 @@ jobs:
     with:
       app: "astarte_data_updater_plant"
     secrets: inherit
+
   astarte_housekeeping_api:
     uses: ./.github/workflows/astarte-apps-build-workflow.yaml
     with:
       app: "astarte_housekeeping_api"
     secrets: inherit
+
   astarte_housekeeping:
     uses: ./.github/workflows/astarte-apps-build-workflow.yaml
     with:
       app: "astarte_housekeeping"
     secrets: inherit
+
   astarte_pairing_api:
     uses: ./.github/workflows/astarte-apps-build-workflow.yaml
     with:
       app: "astarte_pairing_api"
     secrets: inherit
+
   astarte_pairing:
     uses: ./.github/workflows/astarte-apps-build-workflow.yaml
     with:
       app: "astarte_pairing"
     secrets: inherit
-  astarte_realm_managemenet_api:
+
+  astarte_realm_management_api:
     uses: ./.github/workflows/astarte-apps-build-workflow.yaml
     with:
       app: "astarte_realm_management_api"
     secrets: inherit
+
   astarte_realm_management:
     uses: ./.github/workflows/astarte-apps-build-workflow.yaml
     with:
       app: "astarte_realm_management"
     secrets: inherit
+
   astarte_trigger_engine:
     uses: ./.github/workflows/astarte-apps-build-workflow.yaml
     with:
