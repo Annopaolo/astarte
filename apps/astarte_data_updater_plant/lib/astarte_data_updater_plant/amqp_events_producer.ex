@@ -1,7 +1,7 @@
 #
 # This file is part of Astarte.
 #
-# Copyright 2017-2020 Ispirata Srl
+# Copyright 2017-2025 SECO Mind Srl
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -23,7 +23,7 @@ defmodule Astarte.DataUpdaterPlant.AMQPEventsProducer do
   alias Astarte.DataUpdaterPlant.Config
   alias AMQP.Channel
 
-  @connection_backoff 10000
+  @connection_backoff if Mix.env() == :test, do: 0, else: 10000
   @adapter Config.amqp_adapter!()
 
   # API
@@ -86,6 +86,21 @@ defmodule Astarte.DataUpdaterPlant.AMQPEventsProducer do
     end
   end
 
+  @impl true
+  def handle_info(:init, :not_connected) do
+    case init_producer() do
+      {:ok, chan} ->
+        {:noreply, chan}
+
+      {:error, _reason} ->
+        schedule_connect()
+        {:noreply, :not_connected}
+    end
+  end
+
+  @impl true
+  def handle_info(:init, chan), do: {:noreply, chan}
+
   defp init_producer() do
     conn = ExRabbitPool.get_connection_worker(:events_producer_pool)
 
@@ -134,6 +149,6 @@ defmodule Astarte.DataUpdaterPlant.AMQPEventsProducer do
 
   defp schedule_connect() do
     _ = Logger.warning("Retrying connection in #{@connection_backoff} ms")
-    Process.send_after(@connection_backoff, self(), :init)
+    Process.send_after(self(), :init, @connection_backoff)
   end
 end

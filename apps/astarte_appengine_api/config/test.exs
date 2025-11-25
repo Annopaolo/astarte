@@ -17,16 +17,12 @@ config :logger, :console,
     :group_name,
     :device_alias,
     :device_id,
-    :inteface,
+    :interface,
     :path,
     :function,
     :request_id,
     :tag
   ]
-
-config :astarte_rpc, :amqp_connection, host: System.get_env("RABBITMQ_HOST") || "rabbitmq"
-
-config :astarte_appengine_api, :rpc_client, MockRPCClient
 
 config :astarte_appengine_api,
        :data_updater_plant_rpc_client,
